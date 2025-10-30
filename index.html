@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leitor de Produção Mada</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
+    <meta name="theme-color" content="#2c3e50"/>
+    <link rel="icon" href="/icons/favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="container">
+        
+
+        <h1 id="main-title">Leitor de Produção</h1>
+
+
+        <div id="service-selection-menu" class="selection-menu card">
+            <h2>Selecione o Serviço</h2>
+            <div class="service-buttons service-buttons-grid-5">
+                <button class="button-service color-nesting" data-mode="nesting" data-display="NESTING (nanxing)">NESTING</button>
+                <button class="button-service color-seccionadora" data-mode="seccionadora" data-display="SECCIONADORA">SECCIONADORA</button>
+                <button class="button-service color-coladeira" data-mode="coladeira" data-display="COLADEIRA">COLADEIRA</button>
+                <button class="button-service color-holzer" data-mode="holzer" data-display="CENTRO DE CNC (HOLZER)">CNC (HOLZER)</button>
+                <button class="button-service color-premontagem" data-mode="premontagem" data-display="CONFERÊNCIA PREMONTAGEM">PREMONTAGEM</button>
+            </div>
+        </div>
+
+
+        <div id="main-interface" style="display: none;">
+
+
+            <div class="status-bar">
+                <span>Status: <span id="status-online" class="status-indicator offline">Offline</span></span>
+                <span>Pendentes: <span id="pending-count">0</span></span>
+            </div>
+
+
+            <div class="current-selection-header card">
+                 <span>Serviço: <strong id="current-mode-display"></strong></span>
+                 <span>Cliente/Ambiente: <strong id="current-cliente-ambiente-display">--</strong></span>
+                 <button id="btn-open-menu" class="button button-menu" aria-label="Abrir Menu">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+                 </button>
+            </div>
+            
+
+            <div class="global-actions button-group">
+                <button id="btn-sync-cache" class="button">Baixar/Atualizar Lista de Peças</button>
+            </div>
+
+
+            <form id="scan-form">
+                <input type="text" id="barcode-input" placeholder="Aguardando bip..." autocomplete="off">
+                 <button type="submit" style="display: none;">Registrar</button>
+            </form>
+
+            <div id="progress-section" class="progress-section card" style="display: none;">
+                 <div id="progress-text" class="progress-text">Aguardando primeira bipagem...</div>
+                 <div class="progress-bar-container">
+                     <div id="progress-bar" class="progress-bar" style="width: 0%;"></div>
+                 </div>
+             </div>
+
+            <div id="feedback-area" class="feedback info">Pronto para bipar!</div>
+
+            <div id="session-counter" class="session-counter card">
+                 Peças Registradas (Sessão Atual / Serviço): <span id="session-scan-count">0</span>
+            </div>
+
+            <div class="history card">
+                <h2>Histórico Recente (Últimos 5 Gerais)</h2>
+                <ul id="last-scans-list">
+                    <li>Nenhuma bipagem recente.</li>
+                </ul>
+            </div>
+        </div>
+        </div>
+
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+    <nav id="sidebar-nav" class="sidebar">
+        <h2>Menu de Ações</h2>
+        <button id="btn-sync-scans" class="button button-sidebar button-sync">
+            Sincronizar Bipagens (<span id="pending-count-sync-btn">0</span>)
+        </button>
+        <button id="btn-manage-pending" class="button button-sidebar button-manage">
+            Gerenciar Pendentes
+        </button>
+        <button id="btn-clear-cache" class="button button-sidebar button-clear-cache">
+            Limpar Cache de Peças
+        </button>
+        <button id="btn-change-service" class="button button-sidebar button-change-service">
+            Trocar Serviço
+        </button>
+        <button id="btn-close-menu" class="button button-sidebar button-secondary">
+            Fechar Menu
+        </button>
+    </nav>
+    
+    <div id="delete-modal" class="modal">
+         <div class="modal-content card">
+            <span class="close-button" id="close-delete-modal">&times;</span>
+            <h2>Gerenciar Bipagens Pendentes</h2>
+            <p>Selecione as bipagens que deseja excluir antes de sincronizar.</p>
+            <ul id="pending-scans-list-delete">
+                <li>Carregando pendentes...</li>
+            </ul>
+            <div class="modal-actions button-group">
+                <button id="btn-delete-selected" class="button button-warning">Excluir Selecionados</button>
+                <button id="btn-delete-all-pending" class="button button-danger">Excluir Todos Pendentes</button>
+            </div>
+        </div>
+    </div>
+    <script src="idb.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
