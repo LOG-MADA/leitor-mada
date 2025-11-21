@@ -6,7 +6,7 @@ const N8N_POST_SCANS_URL = 'http://192.168.18.190:5678/webhook/dd0a9938-fd80-430
 
 // *** NOVA CONFIGURAÇÃO ***
 // Substitua o final da URL abaixo pelo seu UUID correto do N8N para Retrabalho
-const N8N_POST_RETRABALHO_URL = 'http://192.168.18.190:5678/webhook/INSIRA_AQUI_SEU_UUID_DE_RETRABALHO'; 
+const N8N_POST_RETRABALHO_URL = 'http://192.168.18.190:5678/webhook/0bc90603-a1ac-4cb8-b1d7-20b600102b36'; 
 
 // ============================================================================
 // CONSTANTES DE NOMES DE CAMPOS e CORES
