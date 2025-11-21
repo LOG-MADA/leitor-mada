@@ -2,15 +2,19 @@
 // CONFIGURAÇÃO
 // ============================================================================
 const N8N_GET_PECAS_URL = 'http://192.168.18.190:5678/webhook/da1a3dc7-b5ca-46ff-9ced-600102b22bec';
-const N8N_POST_SCANS_URL = 'http://192.168.18.190:5678/webhook/dd0a9938-fd80-4308-8ecc-c317b61a032e'; // URL para enviar bipagens
+const N8N_POST_SCANS_URL = 'http://192.168.18.190:5678/webhook/dd0a9938-fd80-4308-8ecc-c317b61a032e'; // URL para enviar bipagens normais
+
+// *** NOVA CONFIGURAÇÃO ***
+// Substitua o final da URL abaixo pelo seu UUID correto do N8N para Retrabalho
+const N8N_POST_RETRABALHO_URL = 'http://192.168.18.190:5678/webhook/INSIRA_AQUI_SEU_UUID_DE_RETRABALHO'; 
 
 // ============================================================================
 // CONSTANTES DE NOMES DE CAMPOS e CORES
 // ============================================================================
 const FIELD_CODIGO_BIPAGEM = 'CODIGO_BIPAGEM_TXT';
-const FIELD_CODIGO_USI_1 = 'CODIGO_BIPAGEM_USI_1_TXT'; // <<< NOVO
-const FIELD_CODIGO_USI_2 = 'CODIGO_BIPAGEM_USI_2_TXT'; // <<< NOVO
-const FIELD_CODIGO_USI_3 = 'CODIGO_BIPAGEM_USI_3_TXT'; // <<< NOVO
+const FIELD_CODIGO_USI_1 = 'CODIGO_BIPAGEM_USI_1_TXT'; 
+const FIELD_CODIGO_USI_2 = 'CODIGO_BIPAGEM_USI_2_TXT'; 
+const FIELD_CODIGO_USI_3 = 'CODIGO_BIPAGEM_USI_3_TXT'; 
 
 const FIELD_NOME_PECA = 'CHAVE_PEÇAS_FX';
 const FIELD_CLIENTE_AMBIENTE = 'CLIENTE_AMBIENTE_LKP';
@@ -34,6 +38,7 @@ const MODE_COLORS = {
     coladeira: 'var(--coladeira-color)',
     holzer: 'var(--holzer-color)',
     premontagem: 'var(--premontagem-color)',
+    rebalho: 'var(--rebalho-color)', // <<< NOVA COR ADICIONADA
     default: 'var(--text-color)'
 };
 
@@ -95,7 +100,6 @@ async function getDb() {
         upgrade(db) {
             console.log("Executando upgrade do IndexedDB...");
             if (!db.objectStoreNames.contains('pecas_cache')) {
-                // A chave principal AINDA é o CODIGO_BIPAGEM_TXT
                 db.createObjectStore('pecas_cache', { keyPath: FIELD_CODIGO_BIPAGEM });
             }
             if (!db.objectStoreNames.contains('pending_scans')) {
@@ -120,11 +124,28 @@ function showInterface(interfaceToShow) {
     if (interfaceToShow === 'main' && currentMode) {
         mainInterface.style.display = 'block';
         currentModeDisplayEl.textContent = currentModeDisplay;
-        currentModeDisplayEl.style.color = MODE_COLORS[currentMode] || MODE_COLORS.default;
+        
+        // Ajuste de cor para Retrabalho
+        if (currentMode === 'rebalho') {
+            currentModeDisplayEl.style.color = 'var(--rebalho-color)';
+        } else {
+            currentModeDisplayEl.style.color = MODE_COLORS[currentMode] || MODE_COLORS.default;
+        }
+
         currentClienteAmbiente = null;
         currentClienteAmbienteDisplayEl.textContent = '--';
-        progressText.textContent = 'Aguardando bipagem para calcular progresso...';
-        progressBar.style.width = '0%';
+        
+        // Visual da barra de progresso para Retrabalho vs Normal
+        if (currentMode === 'rebalho') {
+            progressText.textContent = 'Modo Retrabalho Ativo (Bipagem Livre)';
+            progressBar.style.width = '100%';
+            progressBar.style.backgroundColor = 'var(--rebalho-color)';
+            progressSection.style.display = 'block';
+        } else {
+            progressText.textContent = 'Aguardando bipagem para calcular progresso...';
+            progressBar.style.width = '0%';
+        }
+        
         updateSessionCounterUI();
         updateUI();
         displayFeedback('Pronto para bipar!', 'info');
@@ -206,21 +227,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     setInterval(async () => {
         console.log("Timer (5 min): Verificando se deve atualizar peças...");
         if (!navigator.onLine || isCacheSyncing) {
-            console.log("Timer (5 min): Ignorando (Offline ou Sincronização em andamento).");
             return;
         }
         await syncPecasCache(true); // 'true' para modo silencioso
-    }, 300000); // 5 minutos = 300,000 ms
+    }, 300000); // 5 minutos
 
     // Timer 2: Enviar bipagens a cada 10 minutos
     setInterval(async () => {
         console.log("Timer (10 min): Verificando se deve enviar bipagens...");
         if (!navigator.onLine || isScanSyncing) {
-            console.log("Timer (10 min): Ignorando (Offline ou Sincronização em andamento).");
             return;
         }
         await syncPendingScans(true); // 'true' para modo silencioso
-    }, 600000); // 10 minutos = 600,000 ms
+    }, 600000); // 10 minutos
 });
 
 // ============================================================================
@@ -241,6 +260,9 @@ function selectMode(modeValue, modeDisplayName) {
 function isProcessRequired(peca, mode) {
     if (!peca) return false;
     
+    // *** LÓGICA NOVA: Retrabalho sempre é permitido ***
+    if (mode === 'rebalho') return true;
+
     // Helper para checar se o array de máquinas contém o texto
     const maquinaContains = (text) => 
         peca[FIELD_NOME_MAQUINA_LKP] && Array.isArray(peca[FIELD_NOME_MAQUINA_LKP])
@@ -266,6 +288,10 @@ function isProcessRequired(peca, mode) {
 
 function isProcessDone(peca, mode) {
     if (!peca) return false;
+
+    // *** LÓGICA NOVA: Retrabalho NUNCA está "pronto" para permitir repetição ***
+    if (mode === 'rebalho') return false;
+
     // Verifica os novos campos de status.
     switch (mode) {
         case 'nesting':       return !!(peca?.[FIELD_STATUS_NEST_TXT]?.trim());
@@ -302,45 +328,23 @@ async function handleScan(event) {
 
     console.log(`--- Scan [${selectedMode}] Cod:${barcodeBipado} ---`);
 
-    // *** INÍCIO DA MODIFICAÇÃO ***
-    // Agora, procuramos em 4 campos dentro da memória
+    // Busca na memória
     let pecaEncontrada = pecasEmMemoria.find(p => {
         if (!p) return false;
-        
-        // Verifica o campo principal
-        if (p[FIELD_CODIGO_BIPAGEM] && String(p[FIELD_CODIGO_BIPAGEM]).trim() === barcodeBipado) {
-            return true;
-        }
-        // Verifica USI_1
-        if (p[FIELD_CODIGO_USI_1] && String(p[FIELD_CODIGO_USI_1]).trim() === barcodeBipado) {
-            return true;
-        }
-        // Verifica USI_2
-        if (p[FIELD_CODIGO_USI_2] && String(p[FIELD_CODIGO_USI_2]).trim() === barcodeBipado) {
-            return true;
-        }
-        // Verifica USI_3
-        if (p[FIELD_CODIGO_USI_3] && String(p[FIELD_CODIGO_USI_3]).trim() === barcodeBipado) {
-            return true;
-        }
-        
+        if (p[FIELD_CODIGO_BIPAGEM] && String(p[FIELD_CODIGO_BIPAGEM]).trim() === barcodeBipado) return true;
+        if (p[FIELD_CODIGO_USI_1] && String(p[FIELD_CODIGO_USI_1]).trim() === barcodeBipado) return true;
+        if (p[FIELD_CODIGO_USI_2] && String(p[FIELD_CODIGO_USI_2]).trim() === barcodeBipado) return true;
+        if (p[FIELD_CODIGO_USI_3] && String(p[FIELD_CODIGO_USI_3]).trim() === barcodeBipado) return true;
         return false;
     });
     
-    let origem = "Memória"; // A busca agora é sempre na memória.
-    
-    // O bloco 'if (!pecaEncontrada)' que buscava no DB foi removido.
-    // 'pecasEmMemoria' deve ser a fonte única da verdade.
-    // *** FIM DA MODIFICAÇÃO ***
-
+    let origem = "Memória";
 
     let feedbackType = 'error';
-    // Usamos 'barcodeBipado' na mensagem de erro, pois é o que o usuário digitou
     let feedbackMessage = `ERRO: Peça [${barcodeBipado}] não encontrada no cache local. Atualize a lista.`;
     let scanShouldBeSaved = false;
 
     if (pecaEncontrada) {
-        // Nas mensagens de sucesso, usamos o código principal da peça (FIELD_CODIGO_BIPAGEM)
         const codigoPrincipalPeca = pecaEncontrada[FIELD_CODIGO_BIPAGEM] || barcodeBipado;
         const nomePeca = pecaEncontrada[FIELD_NOME_PECA] || 'Nome não encontrado';
         const pecaClienteAmbiente = extractClienteAmbiente(pecaEncontrada);
@@ -349,7 +353,8 @@ async function handleScan(event) {
             console.log(`Mudança de Cliente/Ambiente detectada: ${pecaClienteAmbiente}`);
             currentClienteAmbiente = pecaClienteAmbiente;
             currentClienteAmbienteDisplayEl.textContent = currentClienteAmbiente;
-            updateProgressUI();
+            // Só atualiza barra de progresso se NÃO for retrabalho
+            if (selectedMode !== 'rebalho') updateProgressUI();
         }
 
         const isReq = isProcessRequired(pecaEncontrada, selectedMode);
@@ -361,21 +366,31 @@ async function handleScan(event) {
         } else if (isDone) {
             feedbackType = 'warning'; feedbackMessage = `AVISO: ${selectedMode.toUpperCase()} para [${nomePeca}] (${codigoPrincipalPeca}) já foi registrado.`; scanShouldBeSaved = false;
         } else {
-            feedbackType = 'success'; feedbackMessage = `OK: ${selectedMode.toUpperCase()} - ${nomePeca} (${codigoPrincipalPeca})`; scanShouldBeSaved = true;
+            // SUCESSO
+            scanShouldBeSaved = true;
             sessionScanCount++; updateSessionCounterUI();
 
-            // Atualização Otimista
-            console.log("Atualizando cache memória otimisticamente...");
-            // Usamos o código principal da peça (chave do DB) para o status
-            switch (selectedMode) {
-                case 'nesting':       pecaEncontrada[FIELD_STATUS_NEST_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                case 'seccionadora':  pecaEncontrada[FIELD_STATUS_SECC_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                case 'coladeira':     pecaEncontrada[FIELD_STATUS_COLADEIRA_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                case 'holzer':        pecaEncontrada[FIELD_STATUS_HOLZER_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                case 'premontagem':   pecaEncontrada[FIELD_STATUS_PREMONTAGEM_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
+            if (selectedMode === 'rebalho') {
+                // === FLUXO DE RETRABALHO ===
+                feedbackType = 'warning'; // Alerta visual
+                feedbackMessage = `⚠ RETRABALHO GERADO: ${nomePeca} (${codigoPrincipalPeca})`;
+                // OBS: Não fazemos atualização otimista de status para Retrabalho
+            } else {
+                // === FLUXO NORMAL ===
+                feedbackType = 'success'; 
+                feedbackMessage = `OK: ${selectedMode.toUpperCase()} - ${nomePeca} (${codigoPrincipalPeca})`;
+
+                // Atualização Otimista (status)
+                console.log("Atualizando cache memória otimisticamente...");
+                switch (selectedMode) {
+                    case 'nesting':       pecaEncontrada[FIELD_STATUS_NEST_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
+                    case 'seccionadora':  pecaEncontrada[FIELD_STATUS_SECC_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
+                    case 'coladeira':     pecaEncontrada[FIELD_STATUS_COLADEIRA_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
+                    case 'holzer':        pecaEncontrada[FIELD_STATUS_HOLZER_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
+                    case 'premontagem':   pecaEncontrada[FIELD_STATUS_PREMONTAGEM_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
+                }
+                updateProgressUI();
             }
-              console.log(`Cache memória para ${codigoPrincipalPeca} atualizado p/ modo ${selectedMode}.`);
-              updateProgressUI();
         }
     } else { scanShouldBeSaved = false; }
 
@@ -385,8 +400,14 @@ async function handleScan(event) {
     if (scanShouldBeSaved) {
         try {
             const db = await getDb();
-            // Salvamos o CÓDIGO PRINCIPAL (keyPath) no 'pecaId' pendente
-            await db.add('pending_scans', { pecaId: pecaEncontrada[FIELD_CODIGO_BIPAGEM], timestamp: new Date().toISOString(), mode: selectedMode, encontrada: !!pecaEncontrada, clienteAmbiente: currentClienteAmbiente });
+            // Salvamos o scan nos pendentes
+            await db.add('pending_scans', { 
+                pecaId: pecaEncontrada[FIELD_CODIGO_BIPAGEM], 
+                timestamp: new Date().toISOString(), 
+                mode: selectedMode, 
+                encontrada: !!pecaEncontrada, 
+                clienteAmbiente: currentClienteAmbiente 
+            });
             console.log("Scan adicionado aos pendentes com contexto.");
         } catch (error) { console.error("Erro ao adicionar scan pendente:", error); displayFeedback(`Erro salvar scan: ${error.message}`, 'error'); }
     }
@@ -427,71 +448,47 @@ async function syncPecasCache(isSilent = false) { // Adicionado parâmetro
         if (!response.ok) throw new Error(`Erro ${response.status}: ${response.statusText}`);
         const pecas = await response.json();
 
-        console.log(`2. DADOS BRUTOS RECEBIDOS DO N8N: ${pecas.length} itens.`);
-        if (pecas.length > 0) console.log("Amostra 3 primeiros BRUTOS:", JSON.stringify(pecas.slice(0, 3), null, 2));
-
         const pecasValidas = []; const pecasRejeitadas = [];
         pecas.forEach((p, index) => {
-            if (typeof p !== 'object' || p === null) { pecasRejeitadas.push({ index: index, item: String(p), reason: 'Item não é objeto' }); return; }
+            if (typeof p !== 'object' || p === null) { return; }
             
             // A validação principal (keyPath)
             const codigo = p[FIELD_CODIGO_BIPAGEM] ? String(p[FIELD_CODIGO_BIPAGEM]).trim() : null;
             const clienteAmb = p[FIELD_CLIENTE_AMBIENTE];
             
-            // Filtro principal: Precisa do código principal (keyPath) E cliente/ambiente
+            // Filtro principal
             if (codigo && codigo !== '' && clienteAmb && Array.isArray(clienteAmb) && clienteAmb.length > 0) {
                 pecasValidas.push(p);
-            } else {
-                let reason = !codigo ? `Campo ${FIELD_CODIGO_BIPAGEM} (keyPath) ausente/vazio` : `Campo ${FIELD_CLIENTE_AMBIENTE} ausente, vazio ou não é array`;
-                pecasRejeitadas.push({ index: index, item: JSON.stringify(p).substring(0, 100) + '...', reason: reason });
             }
         });
-        console.log(`3. Peças VÁLIDAS (com ${FIELD_CODIGO_BIPAGEM} E ${FIELD_CLIENTE_AMBIENTE}): ${pecasValidas.length}.`);
 
         if (pecas.length > 0 && pecasValidas.length === 0) {
-            console.error(`ERRO GRAVE: Nenhuma peça válida! Verifique campos ${FIELD_CODIGO_BIPAGEM} e ${FIELD_CLIENTE_AMBIENTE}.`);
-            console.error("Detalhes REJEITADOS:", JSON.stringify(pecasRejeitadas, null, 2));
-            alert(`ERRO: Nenhuma peça válida. Verifique console (F12).`);
+            alert(`ERRO: Nenhuma peça válida.`);
             displayFeedback('Erro ao processar dados.', 'error'); 
-            isCacheSyncing = false; // <<< Libera trava no erro
+            isCacheSyncing = false; 
             return;
-        } else if (pecasRejeitadas.length > 0) {
-            console.warn(`ATENÇÃO: ${pecasRejeitadas.length} itens rejeitados.`);
-            console.warn("Amostra rejeitados:", JSON.stringify(pecasRejeitadas.slice(0, 3), null, 2));
         }
 
         console.log("4. Atualizando DB...");
         const db = await getDb();
         const tx = db.transaction('pecas_cache', 'readwrite');
         await tx.store.clear();
-        console.log("5. Cache DB limpo. Adicionando/Atualizando...");
-        let count = 0;
+        
         for (const peca of pecasValidas) {
             try {
-                // Garante que a keyPath está correta
                 peca[FIELD_CODIGO_BIPAGEM] = String(peca[FIELD_CODIGO_BIPAGEM]).trim();
-                
-                // Normaliza outros campos
                 peca[FIELD_REQ_FILETACAO] = Number(peca[FIELD_REQ_FILETACAO] || 0);
                 peca[FIELD_REQ_CNC] = Number(peca[FIELD_REQ_CNC] || 0);
-                
                 await tx.store.put(peca);
-                count++;
             } catch (innerError) { console.error(`Erro salvar peça ${peca[FIELD_CODIGO_BIPAGEM]}:`, innerError); }
         }
         await tx.done;
         pecasEmMemoria = pecasValidas;
         
-        console.log(`6. ${count} peças salvas. Cache memória atualizado.`);
         if (!isSilent) {
             alert(`Lista atualizada! (${pecasValidas.length} válidas)`);
             displayFeedback('Seleção de serviço necessária.', 'info');
             showInterface('menu');
-        } else {
-            if (serviceSelectionMenu.style.display === 'block') {
-                // populatePedidoSelect(); 
-            }
-            console.log("--- Sync Cache Peças: SUCESSO (Silencioso) ---");
         }
         
     } catch (error) {
@@ -500,21 +497,19 @@ async function syncPecasCache(isSilent = false) { // Adicionado parâmetro
             alert(`Erro ao baixar/atualizar: ${error.message}`);
             displayFeedback('Falha ao atualizar lista.', 'error');
         }
-        console.error("--- Sync Cache Peças: FALHOU ---");
     } finally {
         isCacheSyncing = false; // Libera a trava
     }
 }
 
-
+// *** FUNÇÃO DE UPLOAD ATUALIZADA PARA SEPARAR FLUXOS ***
 async function syncPendingScans(isSilent = false) {
     if (!navigator.onLine) {
         if (!isSilent) alert('Precisa estar online p/ sincronizar!');
         return;
     }
-     if (isScanSyncing) {
-         console.log("SyncPendingScans: Ignorando, sincronização já em andamento.");
-         return;
+    if (isScanSyncing) {
+        return;
     }
 
     const db = await getDb();
@@ -526,26 +521,52 @@ async function syncPendingScans(isSilent = false) {
 
     isScanSyncing = true; // Trava
     if (!isSilent) displayFeedback(`Enviando ${allScans.length} bipagens...`, 'loading');
-    console.log(`--- Sync Scans Pendentes: INICIANDO (${allScans.length} scans) ---`);
+    console.log(`--- Sync Scans: INICIANDO (${allScans.length} scans) ---`);
     
-    // O payload envia o 'pecaId' que é o FIELD_CODIGO_BIPAGEM_TXT
-    const payload = allScans.map(s => ({ pecaId: s.pecaId, timestamp: s.timestamp, mode: s.mode, clienteAmbiente: s.clienteAmbiente }));
-    console.log("Payload:", JSON.stringify(payload));
-
     try {
-        const response = await fetch(N8N_POST_SCANS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        if (!response.ok) { let e = ''; try { e = await response.text(); } catch {} throw new Error(`Erro N8N ${response.status}: ${response.statusText}. ${e}`); }
-        
-        console.log("Sucesso envio. Limpando pendentes...");
-        const tx = db.transaction('pending_scans', 'readwrite');
-        await tx.store.clear(); await tx.done;
-        
-        if (!isSilent) {
-            alert(`${allScans.length} bipagens sincronizadas!`);
-            displayFeedback('Dados sincronizados!', 'success');
+        // 1. Separar scans de Retrabalho dos normais
+        const reworkScans = allScans.filter(s => s.mode === 'rebalho');
+        const normalScans = allScans.filter(s => s.mode !== 'rebalho');
+        let errorOccurred = false;
+
+        // 2. Enviar scans NORMAIS
+        if (normalScans.length > 0) {
+            const payloadNormal = normalScans.map(s => ({ pecaId: s.pecaId, timestamp: s.timestamp, mode: s.mode, clienteAmbiente: s.clienteAmbiente }));
+            console.log(`Enviando ${normalScans.length} normais...`);
+            try {
+                const r1 = await fetch(N8N_POST_SCANS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadNormal) });
+                if (!r1.ok) throw new Error(`Erro N8N Normal: ${r1.statusText}`);
+            } catch (e) {
+                console.error(e); errorOccurred = true;
+            }
         }
-        await updateUI();
-        console.log("--- Sync Scans Pendentes: SUCESSO ---");
+
+        // 3. Enviar scans de RETRABALHO (Nova URL)
+        if (reworkScans.length > 0) {
+            const payloadRework = reworkScans.map(s => ({ pecaId: s.pecaId, timestamp: s.timestamp, mode: 'rebalho', clienteAmbiente: s.clienteAmbiente, motivo: 'App Mobile' }));
+            console.log(`Enviando ${reworkScans.length} retrabalhos...`);
+            try {
+                const r2 = await fetch(N8N_POST_RETRABALHO_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadRework) });
+                if (!r2.ok) throw new Error(`Erro N8N Retrabalho: ${r2.statusText}`);
+            } catch (e) {
+                console.error(e); errorOccurred = true;
+            }
+        }
+
+        // 4. Limpeza se não houve erro
+        if (!errorOccurred) {
+            console.log("Sucesso envio. Limpando pendentes...");
+            const tx = db.transaction('pending_scans', 'readwrite');
+            await tx.store.clear(); await tx.done;
+            
+            if (!isSilent) {
+                alert(`${allScans.length} bipagens sincronizadas!`);
+                displayFeedback('Dados sincronizados!', 'success');
+            }
+            await updateUI();
+        } else {
+            if (!isSilent) displayFeedback('Erro parcial no envio.', 'error');
+        }
         
     } catch (error) {
         console.error("Falha sync scans:", error);
@@ -553,7 +574,6 @@ async function syncPendingScans(isSilent = false) {
             alert(`Erro ao sincronizar: ${error.message}`);
             displayFeedback('Falha na sincronização.', 'error');
         }
-        console.error("--- Sync Scans Pendentes: FALHOU ---");
     } finally {
         isScanSyncing = false; // Libera a trava
     }
@@ -590,18 +610,21 @@ async function renderPendingScansForDeletion() {
             const li = document.createElement('li');
             const checkboxId = `scan-${scan.id}`;
             const timeString = new Date(scan.timestamp).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
-            const modeText = scan.mode ? scan.mode.toUpperCase() : 'DESCONHECIDO';
+            const modeText = scan.mode === 'rebalho' ? 'RETRABALHO' : (scan.mode ? scan.mode.toUpperCase() : 'DESCONHECIDO');
+            
+            // Estilo diferenciado na lista para retrabalho
+            const styleColor = scan.mode === 'rebalho' ? 'color: var(--rebalho-color); font-weight:bold;' : 'color: var(--primary-color);';
+
             li.innerHTML = `
                 <input type="checkbox" id="${checkboxId}" data-pecaid="${scan.pecaId}" data-mode="${scan.mode}" value="${scan.id}">
                 <label for="${checkboxId}">
-                    <span class="scan-mode">[${modeText}]</span>
+                    <span class="scan-mode" style="${styleColor}">[${modeText}]</span>
                     <span class="scan-details">${scan.pecaId}</span>
                     <span class="scan-time">${timeString}</span>
                 </label>
             `;
             pendingScansListDelete.appendChild(li);
         });
-         console.log(`${pendingScans.length} scans pendentes renderizados.`);
     } catch (error) { console.error("Erro renderizar scans exclusão:", error); pendingScansListDelete.innerHTML = '<li>Erro ao carregar lista.</li>'; btnDeleteSelected.disabled = true; btnDeleteAllPending.disabled = true; }
 }
 
@@ -611,7 +634,7 @@ async function deleteSelectedScans() {
 
     const scansToDelete = Array.from(selectedCheckboxes).map(cb => ({
         id: parseInt(cb.value, 10),
-        pecaId: cb.dataset.pecaid, // Este é o FIELD_CODIGO_BIPAGEM_TXT
+        pecaId: cb.dataset.pecaid, 
         mode: cb.dataset.mode
     }));
     if (!confirm(`Excluir ${scansToDelete.length} bipagens selecionadas?`)) return;
@@ -672,32 +695,21 @@ async function clearPartsCache() {
 // FUNÇÃO: REVERTE STATUS OTIMISTA (CORRIGIDA)
 // ============================================================================
 function revertOptimisticUpdate(pecaId, mode) {
-    if (!pecaId || !mode) return;
-    // pecaId aqui é o FIELD_CODIGO_BIPAGEM_TXT
+    // Retrabalho não afeta status otimista, então não precisa reverter nada
+    if (!pecaId || !mode || mode === 'rebalho') return;
+    
     const peca = pecasEmMemoria.find(p => p[FIELD_CODIGO_BIPAGEM] === pecaId);
     if (!peca) {
-        console.warn(`Tentativa de reverter status da peça ${pecaId}, mas não foi encontrada na memória.`);
         return;
     }
 
     console.log(`Revertendo status otimista para ${pecaId}, modo ${mode}`);
-    // Define os campos de status de volta para null
     switch (mode) {
-        case 'nesting':
-            peca[FIELD_STATUS_NEST_TXT] = null;
-            break;
-        case 'seccionadora':
-            peca[FIELD_STATUS_SECC_TXT] = null; 
-            break;
-        case 'coladeira':
-            peca[FIELD_STATUS_COLADEIRA_TXT] = null;
-            break;
-        case 'holzer':
-            peca[FIELD_STATUS_HOLZER_TXT] = null;
-            break;
-        case 'premontagem':
-            peca[FIELD_STATUS_PREMONTAGEM_TXT] = null;
-            break;
+        case 'nesting': peca[FIELD_STATUS_NEST_TXT] = null; break;
+        case 'seccionadora': peca[FIELD_STATUS_SECC_TXT] = null; break;
+        case 'coladeira': peca[FIELD_STATUS_COLADEIRA_TXT] = null; break;
+        case 'holzer': peca[FIELD_STATUS_HOLZER_TXT] = null; break;
+        case 'premontagem': peca[FIELD_STATUS_PREMONTAGEM_TXT] = null; break;
     }
 }
 
@@ -706,6 +718,9 @@ function revertOptimisticUpdate(pecaId, mode) {
 // FUNÇÃO: ATUALIZA BARRA DE PROGRESSO
 // ============================================================================
 function updateProgressUI() {
+    // Retrabalho não usa barra de progresso calculada
+    if (currentMode === 'rebalho') return;
+
     const clienteAmbiente = currentClienteAmbiente;
     const mode = currentMode;
     const modeDisplay = currentModeDisplay;
@@ -713,15 +728,12 @@ function updateProgressUI() {
     if (!clienteAmbiente || !mode || pecasEmMemoria.length === 0) {
         progressSection.style.display = 'none'; return;
     }
-    console.log(`Calculando progresso para Cliente/Amb: ${clienteAmbiente}, Modo:${mode}`);
-
+    
     const pecasDoGrupo = pecasEmMemoria.filter(p => extractClienteAmbiente(p) === clienteAmbiente);
     const pecasRequeridas = pecasDoGrupo.filter(p => isProcessRequired(p, mode));
     const pecasFeitas = pecasRequeridas.filter(p => isProcessDone(p, mode));
     const totalRequeridas = pecasRequeridas.length;
     const totalFeitas = pecasFeitas.length;
-
-    console.log(`Tot Grupo: ${pecasDoGrupo.length}, Req ${mode}: ${totalRequeridas}, Feitas: ${totalFeitas}`);
 
     if (totalRequeridas === 0) {
         progressText.textContent = `${modeDisplay}: Nenhuma peça requer este serviço para este Cliente/Ambiente.`;
@@ -768,10 +780,20 @@ async function updateUI() {
         } else {
             last5Scans.forEach(scan => {
                 const li = document.createElement('li');
-                const statusIcon = scan.encontrada ? '✔️' : '❓';
+                const isRework = scan.mode === 'rebalho';
+                
+                const statusIcon = isRework ? '⚠' : (scan.encontrada ? '✔️' : '❓');
                 const statusClass = scan.encontrada ? 'success' : 'error';
+                
                 const clienteAmbienteTag = scan.clienteAmbiente ? `<span class="cliente-tag">${scan.clienteAmbiente.substring(0, 30)}...</span>` : '';
-                const modeTag = scan.mode ? `<span class="mode-tag">${scan.mode.toUpperCase()}</span>` : '';
+                
+                let modeTag = '';
+                if (isRework) {
+                    modeTag = `<span class="mode-tag" style="color:var(--rebalho-color); font-weight:bold;">RETRABALHO</span>`;
+                } else {
+                    modeTag = scan.mode ? `<span class="mode-tag">${scan.mode.toUpperCase()}</span>` : '';
+                }
+
                 li.innerHTML = `${clienteAmbienteTag}${modeTag}<span class="status-icon ${statusClass}">${statusIcon}</span><span>${scan.pecaId}</span><small>(${new Date(scan.timestamp).toLocaleTimeString()})</small>`;
                 lastScansList.appendChild(li);
             });
@@ -816,7 +838,7 @@ function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
          console.log("Registrando Service Worker...");
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js') // Garanta que este caminho esteja correto
+            navigator.serviceWorker.register('/sw.js') 
                 .then(reg => console.log('Service Worker registrado!', reg))
                 .catch(err => console.error('Falha registro SW:', err));
         });

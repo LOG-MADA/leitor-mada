@@ -27,6 +27,10 @@
     --holzer-hover: #8e44ad;
     --premontagem-color: #f1c40f;
     --premontagem-hover: #f39c12;
+    
+    /* NOVA COR: Retrabalho */
+    --rebalho-color: #c0392b; 
+    --rebalho-hover: #a93226;
 
     /* Cores Botões Sidebar */
     --sync-color: var(--primary-color);
@@ -200,6 +204,22 @@ h2 {
 .color-holzer:hover { background-color: var(--holzer-hover); }
 .color-premontagem { background-color: var(--premontagem-color); }
 .color-premontagem:hover { background-color: var(--premontagem-hover); }
+
+/* NOVA CLASSE: Retrabalho */
+.color-rebalho { 
+    background-color: var(--rebalho-color); 
+    border: 2px solid #a93226;
+    box-shadow: 0 4px 8px rgba(192, 57, 43, 0.3);
+}
+.color-rebalho:hover { background-color: var(--rebalho-hover); }
+
+/* Se a tela for grande, faz o botão de retrabalho ocupar mais espaço para destaque */
+@media (min-width: 600px) {
+    .button-service.color-rebalho {
+        grid-column: span 2; 
+    }
+}
+
 
 /* ======================== */
 /* Interface Principal      */
