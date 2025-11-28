@@ -17,6 +17,9 @@ const FIELD_NOME_PECA = 'CHAVE_PEÇAS_FX';
 const FIELD_CLIENTE_AMBIENTE = 'CLIENTE_AMBIENTE_LKP';
 const FIELD_NOME_MAQUINA_LKP = 'NOME_MAQUINA_LKP'; 
 
+// Campo de Módulo
+const FIELD_AMBIENTE_COMPLETO = 'AMBIENTE_COMPLETO_TXT';
+
 // Campos de Requisito
 const FIELD_REQ_FILETACAO = 'PEÇA_FILETAÇÃO_NUM';
 const FIELD_REQ_CNC = 'PEÇA_USINAGEM_CNC_NUM';
@@ -26,7 +29,7 @@ const FIELD_STATUS_NEST_TXT = 'BIPAGEM_NEST_TXT';
 const FIELD_STATUS_SECC_TXT = 'BIPAGEM_SECC_TXT';
 const FIELD_STATUS_COLADEIRA_TXT = 'BIPAGEM_COLADEIRA_TXT';
 const FIELD_STATUS_HOLZER_TXT = 'BIPAGEM_HOLZER_TXT';
-const FIELD_STATUS_PREMONTAGEM_TXT = 'BIPAGEM_PREMONTAGEM_TXT';
+const FIELD_STATUS_PREMONTAGEM_TXT = 'BIPAGEM_PREMONTAGEM_TXT'; // Usado para filtrar lista
 
 // Cores dos Serviços
 const MODE_COLORS = {
@@ -51,6 +54,9 @@ let feedbackTimer = null;
 let isCacheSyncing = false; 
 let isScanSyncing = false; 
 
+// Lista de módulos selecionados para filtro na pré-montagem
+let selectedModules = []; 
+
 // ============================================================================
 // MAPEAMENTO DOS ELEMENTOS DA INTERFACE (DOM)
 // ============================================================================
@@ -72,6 +78,8 @@ const sessionCountEl = document.getElementById('session-scan-count');
 const progressSection = document.getElementById('progress-section');
 const progressBar = document.getElementById('progress-bar');
 const progressText = document.getElementById('progress-text');
+
+// Elementos de Modais e Menu
 const deleteModal = document.getElementById('delete-modal');
 const closeDeleteModalBtn = document.getElementById('close-delete-modal');
 const pendingScansListDelete = document.getElementById('pending-scans-list-delete');
@@ -85,6 +93,18 @@ const btnSyncScans = document.getElementById('btn-sync-scans');
 const btnManagePending = document.getElementById('btn-manage-pending');
 const btnClearCache = document.getElementById('btn-clear-cache');
 const btnChangeService = document.getElementById('btn-change-service');
+
+// Elementos de Módulos
+const premontagemControls = document.getElementById('premontagem-controls');
+const btnSelectModules = document.getElementById('btn-select-modules');
+const moduleModal = document.getElementById('module-modal');
+const closeModuleModalBtn = document.getElementById('close-module-modal');
+const moduleListContainer = document.getElementById('module-list');
+const btnConfirmModules = document.getElementById('btn-confirm-modules');
+const btnSelectAllModules = document.getElementById('btn-select-all-modules');
+const moduleSearchInput = document.getElementById('module-search');
+const activeFilterDisplay = document.getElementById('active-filter-display');
+
 
 // ============================================================================
 // BANCO DE DADOS LOCAL (INDEXEDDB)
@@ -111,6 +131,7 @@ function showInterface(interfaceToShow) {
     serviceSelectionMenu.style.display = 'none';
     mainInterface.style.display = 'none';
     progressSection.style.display = 'none';
+    premontagemControls.style.display = 'none'; 
     
     if (interfaceToShow === 'main' && currentMode) {
         mainInterface.style.display = 'block';
@@ -124,6 +145,11 @@ function showInterface(interfaceToShow) {
 
         currentClienteAmbiente = null;
         currentClienteAmbienteDisplayEl.textContent = '--';
+
+        // Mostrar controle de módulos apenas se for pre-montagem
+        if (currentMode === 'premontagem') {
+            premontagemControls.style.display = 'block';
+        }
         
         if (currentMode === 'rebalho') {
             progressText.textContent = 'Modo Retrabalho Ativo (Bipagem Livre)';
@@ -153,10 +179,12 @@ function resetSelections() {
     currentModeDisplay = 'Nenhum';
     currentClienteAmbiente = null;
     sessionScanCount = 0;
+    selectedModules = []; 
+    activeFilterDisplay.style.display = 'none';
 }
 
 // ============================================================================
-// CONTROLE DA SIDEBAR
+// CONTROLE DA SIDEBAR E MODAIS
 // ============================================================================
 function openSidebar() { sidebarNav.classList.add('open'); sidebarOverlay.classList.add('open'); }
 function closeSidebar() { sidebarNav.classList.remove('open'); sidebarOverlay.classList.remove('open'); }
@@ -176,7 +204,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     btnOpenMenu.addEventListener('click', openSidebar);
     btnCloseMenu.addEventListener('click', closeSidebar);
-    sidebarOverlay.addEventListener('click', closeSidebar);
+    sidebarOverlay.addEventListener('click', () => { closeSidebar(); });
     
     btnSyncScans.addEventListener('click', () => { closeSidebar(); syncPendingScans(false); });
     btnManagePending.addEventListener('click', () => { closeSidebar(); openDeleteModal(); });
@@ -186,9 +214,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     closeDeleteModalBtn.addEventListener('click', closeDeleteModal);
     btnDeleteSelected.addEventListener('click', deleteSelectedScans);
     btnDeleteAllPending.addEventListener('click', clearAllPendingScans);
-    window.addEventListener('click', (event) => { if (event.target == deleteModal) closeDeleteModal(); });
-    window.addEventListener('keydown', (event) => { if (event.key === "Escape" && deleteModal.style.display === "block") closeDeleteModal(); });
 
+    // Eventos do Modal de Módulos
+    btnSelectModules.addEventListener('click', openModuleModal);
+    closeModuleModalBtn.addEventListener('click', closeModuleModal);
+    btnConfirmModules.addEventListener('click', confirmModuleSelection);
+    btnSelectAllModules.addEventListener('click', selectAllModulesInModal);
+    moduleSearchInput.addEventListener('keyup', filterModuleList);
+
+    window.addEventListener('click', (event) => { 
+        if (event.target == deleteModal) closeDeleteModal(); 
+        if (event.target == moduleModal) closeModuleModal();
+    });
+    
     updateOnlineStatus(navigator.onLine);
     resetSelections();
     showInterface('menu');
@@ -206,6 +244,114 @@ function selectMode(modeValue, modeDisplayName) {
     sessionScanCount = 0;
     showInterface('main');
 }
+
+// ============================================================================
+// LÓGICA DE MÓDULOS (PRE-MONTAGEM) - ALTERAÇÃO SOLICITADA
+// ============================================================================
+function openModuleModal() {
+    let partsToScan = pecasEmMemoria;
+    
+    // Se temos um cliente focado, filtrar por ele.
+    if (currentClienteAmbiente) {
+        partsToScan = pecasEmMemoria.filter(p => extractClienteAmbiente(p) === currentClienteAmbiente);
+    } 
+
+    if (partsToScan.length === 0) {
+        alert("Nenhuma peça carregada ou cliente não identificado. Bipe uma peça primeiro ou atualize a lista.");
+        return;
+    }
+
+    // 1. Agrupar peças por módulo e calcular status
+    // Objeto estrutura: { "NomeModulo": { total: 0, done: 0 } }
+    const moduleStats = {};
+
+    partsToScan.forEach(p => {
+        const modName = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)";
+        
+        if (!moduleStats[modName]) {
+            moduleStats[modName] = { total: 0, done: 0 };
+        }
+
+        moduleStats[modName].total++;
+
+        // Verifica se já foi bipado na pré-montagem (Campo BIPAGEM_PREMONTAGEM_TXT tem valor)
+        if (p[FIELD_STATUS_PREMONTAGEM_TXT] && p[FIELD_STATUS_PREMONTAGEM_TXT].trim() !== '') {
+            moduleStats[modName].done++;
+        }
+    });
+
+    // 2. Filtrar módulos que NÃO estão 100% concluídos
+    const incompleteModules = Object.keys(moduleStats).filter(modName => {
+        const stats = moduleStats[modName];
+        // Retorna true (mostra na lista) apenas se 'done' for menor que 'total'
+        return stats.done < stats.total;
+    }).sort();
+
+    // Se não houver módulos incompletos, avisa o usuário
+    if (incompleteModules.length === 0) {
+        alert("Todos os módulos deste ambiente já foram concluídos na Pré-montagem!");
+        return;
+    }
+
+    // 3. Renderizar Lista
+    moduleListContainer.innerHTML = '';
+    incompleteModules.forEach((modName, index) => {
+        const stats = moduleStats[modName];
+        const li = document.createElement('li');
+        const isChecked = selectedModules.includes(modName);
+        
+        // Opcional: Mostrar progresso (ex: 2/10) no label para ajudar
+        const progressLabel = `<span style="font-size: 0.8em; color: #888; margin-left: 5px;">(${stats.done}/${stats.total})</span>`;
+
+        li.innerHTML = `
+            <input type="checkbox" id="mod-${index}" value="${modName}" ${isChecked ? 'checked' : ''}>
+            <label for="mod-${index}">${modName} ${progressLabel}</label>
+        `;
+        moduleListContainer.appendChild(li);
+    });
+
+    moduleModal.style.display = "block";
+    moduleSearchInput.value = '';
+    moduleSearchInput.focus();
+}
+
+function closeModuleModal() {
+    moduleModal.style.display = "none";
+}
+
+function filterModuleList() {
+    const term = moduleSearchInput.value.toLowerCase();
+    const items = moduleListContainer.querySelectorAll('li');
+    items.forEach(li => {
+        const text = li.textContent.toLowerCase();
+        li.style.display = text.includes(term) ? 'flex' : 'none';
+    });
+}
+
+function selectAllModulesInModal() {
+    const checkboxes = moduleListContainer.querySelectorAll('input[type="checkbox"]');
+    const visibleCheckboxes = Array.from(checkboxes).filter(cb => cb.parentElement.style.display !== 'none');
+    const allChecked = visibleCheckboxes.every(cb => cb.checked);
+    visibleCheckboxes.forEach(cb => cb.checked = !allChecked);
+}
+
+function confirmModuleSelection() {
+    const checkboxes = moduleListContainer.querySelectorAll('input[type="checkbox"]:checked');
+    selectedModules = Array.from(checkboxes).map(cb => cb.value);
+    
+    closeModuleModal();
+    updateProgressUI(); 
+    
+    if (selectedModules.length > 0) {
+        displayFeedback(`Filtro aplicado: ${selectedModules.length} módulos selecionados.`, 'success');
+        activeFilterDisplay.textContent = `Filtro Ativo: ${selectedModules.length} Módulos selecionados`;
+        activeFilterDisplay.style.display = 'block';
+    } else {
+        displayFeedback('Filtro removido. Mostrando tudo pendente.', 'info');
+        activeFilterDisplay.style.display = 'none';
+    }
+}
+
 
 // ============================================================================
 // FUNÇÕES AUXILIARES DE VERIFICAÇÃO E EXTRAÇÃO
@@ -250,7 +396,7 @@ function extractClienteAmbiente(peca) {
 }
 
 // ============================================================================
-// LÓGICA PRINCIPAL DE BIPAGEM
+// LÓGICA PRINCIPAL DE BIPAGEM - ALTERAÇÃO SOLICITADA (BLOQUEIO)
 // ============================================================================
 async function handleScan(event) {
     event.preventDefault();
@@ -277,7 +423,9 @@ async function handleScan(event) {
         const codigoPrincipalPeca = pecaEncontrada[FIELD_CODIGO_BIPAGEM] || barcodeBipado;
         const nomePeca = pecaEncontrada[FIELD_NOME_PECA] || 'Nome não encontrado';
         const pecaClienteAmbiente = extractClienteAmbiente(pecaEncontrada);
+        const pecaModulo = pecaEncontrada[FIELD_AMBIENTE_COMPLETO] ? String(pecaEncontrada[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)";
 
+        // Atualiza contexto de Cliente
         if (pecaClienteAmbiente !== currentClienteAmbiente) {
             currentClienteAmbiente = pecaClienteAmbiente;
             currentClienteAmbienteDisplayEl.textContent = currentClienteAmbiente;
@@ -287,38 +435,47 @@ async function handleScan(event) {
         const isReq = isProcessRequired(pecaEncontrada, selectedMode);
         const isDone = isProcessDone(pecaEncontrada, selectedMode);
 
+        // ============================================================
+        // VERIFICAÇÃO RÍGIDA DE MÓDULO (PRE-MONTAGEM)
+        // ============================================================
+        // Se estiver em premontagem E houver filtro de módulos ativos
+        if (selectedMode === 'premontagem' && selectedModules.length > 0) {
+            if (!selectedModules.includes(pecaModulo)) {
+                // BLOQUEIO TOTAL
+                feedbackType = 'error';
+                feedbackMessage = `BLOQUEADO: Peça do módulo "${pecaModulo}" não selecionado!`;
+                
+                // Tocar som ou vibração se possível (opcional)
+                if(navigator.vibrate) navigator.vibrate([100, 50, 100]);
+                
+                scanShouldBeSaved = false; // Não permite salvar
+                
+                // Interrompe o fluxo e exibe erro
+                displayFeedback(feedbackMessage, feedbackType);
+                barcodeInput.value = ''; 
+                barcodeInput.focus();
+                return; 
+            }
+        }
+        // ============================================================
+
         if (!isReq) {
-            // ============================================================
-            // INICIO DA ALTERAÇÃO SOLICITADA (Exceção CNC)
-            // ============================================================
-            if (selectedMode === 'holzer') {
-                // Permite salvar, mas com aviso amarelo e mensagem específica
+             if (selectedMode === 'holzer') {
                 feedbackType = 'warning'; 
                 feedbackMessage = "Essa peça não é necessario cnc mas vai ser bipada normalmente em nome da CNC";
                 scanShouldBeSaved = true;
-
-                // Conta para a sessão do usuário
                 sessionScanCount++; 
                 updateSessionCounterUI();
-
-                // Atualiza localmente para evitar bipar 2x, mas NÃO conta para o progresso da barra
                 pecaEncontrada[FIELD_STATUS_HOLZER_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM];
-                
-                // NOTA: updateProgressUI() não é chamado aqui de propósito,
-                // pois como isReq é false, essa peça não faz parte do total esperado.
             } else {
-                // Comportamento padrão para os outros setores
                 feedbackType = 'info'; 
                 feedbackMessage = `INFO: Peça [${nomePeca}] (${codigoPrincipalPeca}) não requer ${selectedMode}.`; 
                 scanShouldBeSaved = false;
             }
-            // ============================================================
-            // FIM DA ALTERAÇÃO SOLICITADA
-            // ============================================================
         } 
         else if (isDone) {
             feedbackType = 'warning'; 
-            feedbackMessage = `AVISO: ${selectedMode.toUpperCase()} para [${nomePeca}] (${codigoPrincipalPeca}) já foi registrado.`; 
+            feedbackMessage = `AVISO: ${selectedMode.toUpperCase()} para [${nomePeca}] já foi registrado.`; 
             scanShouldBeSaved = false;
         } 
         else {
@@ -331,7 +488,7 @@ async function handleScan(event) {
                 feedbackMessage = `⚠ RETRABALHO GERADO: ${nomePeca} (${codigoPrincipalPeca})`;
             } else {
                 feedbackType = 'success'; 
-                feedbackMessage = `OK: ${selectedMode.toUpperCase()} - ${nomePeca} (${codigoPrincipalPeca})`;
+                feedbackMessage = `OK: ${selectedMode.toUpperCase()} - ${nomePeca}`;
 
                 // Atualização Otimista
                 switch (selectedMode) {
@@ -416,6 +573,11 @@ async function syncPecasCache(isSilent = false) {
                 peca[FIELD_CODIGO_BIPAGEM] = String(peca[FIELD_CODIGO_BIPAGEM]).trim();
                 peca[FIELD_REQ_FILETACAO] = Number(peca[FIELD_REQ_FILETACAO] || 0);
                 peca[FIELD_REQ_CNC] = Number(peca[FIELD_REQ_CNC] || 0);
+                
+                if (peca[FIELD_AMBIENTE_COMPLETO]) {
+                    peca[FIELD_AMBIENTE_COMPLETO] = String(peca[FIELD_AMBIENTE_COMPLETO]).trim();
+                }
+
                 await tx.store.put(peca);
             } catch (innerError) { console.error(`Erro salvar peça ${peca[FIELD_CODIGO_BIPAGEM]}:`, innerError); }
         }
@@ -626,21 +788,33 @@ function updateProgressUI() {
         progressSection.style.display = 'none'; return;
     }
     
-    const pecasDoGrupo = pecasEmMemoria.filter(p => extractClienteAmbiente(p) === clienteAmbiente);
+    // 1. Filtro Básico: Peças do Cliente Atual
+    let pecasDoGrupo = pecasEmMemoria.filter(p => extractClienteAmbiente(p) === clienteAmbiente);
+    
+    // 2. Filtro Secundário: Módulos Selecionados (Apenas se em pre-montagem e houver seleção)
+    let textoModulo = "";
+    if (mode === 'premontagem' && selectedModules.length > 0) {
+        pecasDoGrupo = pecasDoGrupo.filter(p => {
+             const mod = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)";
+             return selectedModules.includes(mod);
+        });
+        textoModulo = ` [${selectedModules.length} Módulos Filtrados]`;
+    }
+
     const pecasRequeridas = pecasDoGrupo.filter(p => isProcessRequired(p, mode));
     const pecasFeitas = pecasRequeridas.filter(p => isProcessDone(p, mode));
     const totalRequeridas = pecasRequeridas.length;
     const totalFeitas = pecasFeitas.length;
 
     if (totalRequeridas === 0) {
-        progressText.textContent = `${modeDisplay}: Nenhuma peça requer este serviço para este Cliente/Ambiente.`;
+        progressText.textContent = `${modeDisplay}: Nenhuma peça requer este serviço (neste filtro).`;
         progressBar.style.width = '0%';
         progressBar.style.backgroundColor = MODE_COLORS.default;
         progressSection.style.display = 'block';
     } else {
         const percentage = totalRequeridas > 0 ? (totalFeitas / totalRequeridas) * 100 : 0;
-        const clienteAmbTrunc = clienteAmbiente.length > 50 ? clienteAmbiente.substring(0, 47) + '...' : clienteAmbiente;
-        progressText.textContent = `${modeDisplay} [${clienteAmbTrunc}]: ${totalFeitas} / ${totalRequeridas} (${percentage.toFixed(0)}%)`;
+        const clienteAmbTrunc = clienteAmbiente.length > 40 ? clienteAmbiente.substring(0, 37) + '...' : clienteAmbiente;
+        progressText.textContent = `${modeDisplay}: ${totalFeitas} / ${totalRequeridas} (${percentage.toFixed(0)}%)${textoModulo}`;
         progressBar.style.width = percentage + '%';
         progressBar.style.backgroundColor = MODE_COLORS[mode] || MODE_COLORS.default;
         progressSection.style.display = 'block';

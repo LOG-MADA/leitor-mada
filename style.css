@@ -42,7 +42,6 @@
     --change-service-color: #7f8c8d;
     --change-service-hover: #6c7a7d;
 
-
     --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     --base-font-size: 16px;
     --heading-font-size: 1.8rem;
@@ -367,6 +366,107 @@ h2 {
 #pending-scans-list-delete li .scan-mode { font-weight: bold; font-size: 0.85rem; color: var(--primary-color); }
 .modal-actions { margin-top: 25px; padding-top: 15px; border-top: 1px solid #eee; }
 
+
+/* ========================================================================= */
+/* NOVOS ESTILOS PARA O FILTRO DE MÓDULOS (PRE-MONTAGEM)                     */
+/* ========================================================================= */
+
+/* Container da lista de módulos (Checklist) */
+.checklist-container {
+    list-style: none;
+    padding: 0;
+    margin: 15px 0;
+    overflow-y: auto;
+    border: 1px solid #eee;
+    background-color: #fafafa;
+    border-radius: 4px;
+    flex-grow: 1; /* Faz a lista crescer para ocupar espaço no modal */
+    min-height: 200px;
+    max-height: 50vh; /* Limita altura para não estourar a tela */
+}
+
+.checklist-container li {
+    padding: 12px 15px;
+    border-bottom: 1px solid #eaeaea;
+    display: flex;
+    align-items: center;
+    transition: background-color 0.2s;
+}
+
+.checklist-container li:last-child {
+    border-bottom: none;
+}
+
+.checklist-container li:hover {
+    background-color: #f1f1f1;
+}
+
+/* Checkbox Grande para Toque */
+.checklist-container input[type="checkbox"] {
+    transform: scale(1.6); /* Aumenta o tamanho do checkbox */
+    margin-right: 15px;
+    cursor: pointer;
+    accent-color: var(--primary-color);
+}
+
+.checklist-container label {
+    cursor: pointer;
+    font-size: 1rem;
+    color: #333;
+    width: 100%;
+    word-break: break-word; /* Quebra texto longo de nome de módulo */
+    user-select: none; /* Evita selecionar texto ao clicar repetidamente */
+}
+
+/* Input de Busca no Modal */
+.filter-controls input {
+    width: 100%;
+    padding: 12px;
+    font-size: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    margin-bottom: 10px;
+}
+.filter-controls input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+/* Botão Verde de Sucesso */
+.button-success {
+    background-color: var(--secondary-color);
+    color: white;
+}
+.button-success:hover:not(:disabled) {
+    background-color: #27ae60;
+}
+
+/* Ajuste Específico para o Modal de Módulos (Layout Flexível) */
+#module-modal .modal-content {
+    display: flex;
+    flex-direction: column;
+    height: 85vh; /* Ocupa quase toda altura da tela */
+    overflow: hidden; /* O scroll fica apenas na lista interna */
+    padding-bottom: 15px;
+}
+
+/* Aviso de Filtro Ativo (Barra Amarela) */
+#active-filter-display {
+    background-color: #fff3cd;
+    color: #856404;
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid #ffeeba;
+    margin-top: 10px;
+    margin-bottom: 5px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 0.9rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+
 /* ======================== */
 /* Responsividade           */
 /* ======================== */
@@ -384,7 +484,11 @@ h2 {
     .current-selection-header .button-menu { margin-left: 0; margin-top: 5px; width: 100%; }
     .main-actions, .danger-zone .button-group, .modal-actions { flex-direction: column; }
     .global-actions .button { font-size: 1.1rem; padding: 15px; }
-    .modal-content { width: 95%; margin: 10% auto; padding: 20px; }
+    .modal-content { width: 95%; margin: 5% auto; padding: 20px; }
+    
+    /* Ajuste Modal Mobile */
+    #module-modal .modal-content { height: 90vh; margin-top: 10px; }
+    
     .service-buttons-grid-5 { grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; }
     .button-service { padding: 15px 5px; font-size: 0.9rem; min-height: 80px; }
     .sidebar { width: 250px; right: -270px; padding: 20px; }

@@ -43,6 +43,10 @@
                  </button>
             </div>
             
+            <div id="premontagem-controls" class="global-actions button-group" style="display: none; margin-bottom: 15px;">
+                <button id="btn-select-modules" class="button button-tertiary">⚙ Selecionar Módulos (Filtro)</button>
+            </div>
+
             <div class="global-actions button-group">
                 <button id="btn-sync-cache" class="button">Baixar/Atualizar Lista de Peças</button>
             </div>
@@ -54,6 +58,8 @@
 
             <div id="progress-section" class="progress-section card" style="display: none;">
                  <div id="progress-text" class="progress-text">Aguardando primeira bipagem...</div>
+                 <div id="active-filter-display" style="font-size: 0.85rem; color: var(--warning-color); text-align: center; margin-bottom: 5px; display: none;"></div>
+                 
                  <div class="progress-bar-container">
                      <div id="progress-bar" class="progress-bar" style="width: 0%;"></div>
                  </div>
@@ -109,6 +115,27 @@
             </div>
         </div>
     </div>
+
+    <div id="module-modal" class="modal">
+        <div class="modal-content card" style="max-height: 80vh; display: flex; flex-direction: column;">
+           <span class="close-button" id="close-module-modal">&times;</span>
+           <h2>Selecionar Módulos</h2>
+           <p style="font-size: 0.9rem; color: #666;">Selecione os módulos que serão montados agora. O progresso será calculado apenas sobre eles.</p>
+           
+           <div class="filter-controls" style="margin-bottom: 10px;">
+               <input type="text" id="module-search" placeholder="Buscar módulo..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+           </div>
+
+           <ul id="module-list" class="checklist-container">
+               </ul>
+           
+           <div class="modal-actions button-group" style="margin-top: auto;">
+               <button id="btn-select-all-modules" class="button button-secondary button-small">Todos</button>
+               <button id="btn-confirm-modules" class="button button-success">Confirmar Seleção</button>
+           </div>
+       </div>
+   </div>
+
     <script src="idb.js"></script>
     <script src="app.js"></script>
 </body>
