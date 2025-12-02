@@ -371,6 +371,33 @@ h2 {
 /* NOVOS ESTILOS PARA O FILTRO DE MÓDULOS (PRE-MONTAGEM)                     */
 /* ========================================================================= */
 
+/* --- [NOVO] Estilos para o Select de Cliente --- */
+.filter-section {
+    margin-bottom: 15px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #eee;
+}
+.filter-section label {
+    display: block;
+    font-weight: bold;
+    margin-bottom: 5px;
+    color: #333;
+}
+.filter-section select {
+    width: 100%;
+    padding: 12px;
+    font-size: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    background-color: #fff;
+    margin-bottom: 10px;
+}
+.filter-section select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
 /* Container da lista de módulos (Checklist) */
 .checklist-container {
     list-style: none;

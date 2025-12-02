@@ -14,8 +14,11 @@ const FIELD_CODIGO_USI_2 = 'CODIGO_BIPAGEM_USI_2_TXT';
 const FIELD_CODIGO_USI_3 = 'CODIGO_BIPAGEM_USI_3_TXT'; 
 
 const FIELD_NOME_PECA = 'CHAVE_PEÇAS_FX';
-const FIELD_CLIENTE_AMBIENTE = 'CLIENTE_AMBIENTE_LKP';
+const FIELD_CLIENTE_AMBIENTE = 'CLIENTE_AMBIENTE_LKP'; // Mantido para retrocompatibilidade visual
 const FIELD_NOME_MAQUINA_LKP = 'NOME_MAQUINA_LKP'; 
+
+// --- [NOVO] Campo para Filtro de Cliente Solicitado ---
+const FIELD_CLIENTE_FABRICANDO = 'NOME_CLIENTE_FABRICANDO_LKP';
 
 // Campo de Módulo
 const FIELD_AMBIENTE_COMPLETO = 'AMBIENTE_COMPLETO_TXT';
@@ -29,7 +32,7 @@ const FIELD_STATUS_NEST_TXT = 'BIPAGEM_NEST_TXT';
 const FIELD_STATUS_SECC_TXT = 'BIPAGEM_SECC_TXT';
 const FIELD_STATUS_COLADEIRA_TXT = 'BIPAGEM_COLADEIRA_TXT';
 const FIELD_STATUS_HOLZER_TXT = 'BIPAGEM_HOLZER_TXT';
-const FIELD_STATUS_PREMONTAGEM_TXT = 'BIPAGEM_PREMONTAGEM_TXT'; // Usado para filtrar lista
+const FIELD_STATUS_PREMONTAGEM_TXT = 'BIPAGEM_PREMONTAGEM_TXT'; 
 
 // Cores dos Serviços
 const MODE_COLORS = {
@@ -49,13 +52,14 @@ let pecasEmMemoria = [];
 let sessionScanCount = 0;
 let currentMode = null;
 let currentModeDisplay = 'Nenhum';
-let currentClienteAmbiente = null;
+let currentClienteAmbiente = null; // Visual
 let feedbackTimer = null;
 let isCacheSyncing = false; 
 let isScanSyncing = false; 
 
-// Lista de módulos selecionados para filtro na pré-montagem
-let selectedModules = []; 
+// --- [ALTERAÇÃO] Variáveis de Filtro ---
+let selectedClientFilter = null; // Armazena o cliente selecionado
+let selectedModules = [];        // Armazena os módulos selecionados
 
 // ============================================================================
 // MAPEAMENTO DOS ELEMENTOS DA INTERFACE (DOM)
@@ -65,7 +69,7 @@ const serviceSelectionMenu = document.getElementById('service-selection-menu');
 const mainInterface = document.getElementById('main-interface');
 const serviceButtons = document.querySelectorAll('#service-selection-menu .button-service');
 const currentModeDisplayEl = document.getElementById('current-mode-display');
-const currentClienteAmbienteDisplayEl = document.getElementById('current-cliente-ambiente-display');
+const currentClienteDisplayEl = document.getElementById('current-cliente-display'); // ID Atualizado no HTML
 const barcodeInput = document.getElementById('barcode-input');
 const scanForm = document.getElementById('scan-form');
 const feedbackArea = document.getElementById('feedback-area');
@@ -94,11 +98,12 @@ const btnManagePending = document.getElementById('btn-manage-pending');
 const btnClearCache = document.getElementById('btn-clear-cache');
 const btnChangeService = document.getElementById('btn-change-service');
 
-// Elementos de Módulos
+// Elementos de Módulos (Atualizados)
 const premontagemControls = document.getElementById('premontagem-controls');
 const btnSelectModules = document.getElementById('btn-select-modules');
 const moduleModal = document.getElementById('module-modal');
 const closeModuleModalBtn = document.getElementById('close-module-modal');
+const modalClientSelect = document.getElementById('modal-client-select'); // Novo Select
 const moduleListContainer = document.getElementById('module-list');
 const btnConfirmModules = document.getElementById('btn-confirm-modules');
 const btnSelectAllModules = document.getElementById('btn-select-all-modules');
@@ -143,12 +148,13 @@ function showInterface(interfaceToShow) {
             currentModeDisplayEl.style.color = MODE_COLORS[currentMode] || MODE_COLORS.default;
         }
 
-        currentClienteAmbiente = null;
-        currentClienteAmbienteDisplayEl.textContent = '--';
-
         // Mostrar controle de módulos apenas se for pre-montagem
         if (currentMode === 'premontagem') {
             premontagemControls.style.display = 'block';
+            if(!selectedClientFilter) {
+                 // Feedback inicial para lembrar de selecionar
+                 displayFeedback("ATENÇÃO: Selecione o Cliente e Módulos para iniciar.", "warning");
+            }
         }
         
         if (currentMode === 'rebalho') {
@@ -157,13 +163,12 @@ function showInterface(interfaceToShow) {
             progressBar.style.backgroundColor = 'var(--rebalho-color)';
             progressSection.style.display = 'block';
         } else {
-            progressText.textContent = 'Aguardando bipagem para calcular progresso...';
+            progressText.textContent = 'Aguardando bipagem...';
             progressBar.style.width = '0%';
         }
         
         updateSessionCounterUI();
         updateUI();
-        displayFeedback('Pronto para bipar!', 'info');
         barcodeInput.focus();
     } else { 
         mainTitle.style.display = 'block'; 
@@ -179,8 +184,12 @@ function resetSelections() {
     currentModeDisplay = 'Nenhum';
     currentClienteAmbiente = null;
     sessionScanCount = 0;
+    
+    // Reset Filtros
+    selectedClientFilter = null;
     selectedModules = []; 
     activeFilterDisplay.style.display = 'none';
+    if(currentClienteDisplayEl) currentClienteDisplayEl.textContent = '--';
 }
 
 // ============================================================================
@@ -221,6 +230,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnConfirmModules.addEventListener('click', confirmModuleSelection);
     btnSelectAllModules.addEventListener('click', selectAllModulesInModal);
     moduleSearchInput.addEventListener('keyup', filterModuleList);
+    
+    // --- [NOVO] Evento para carregar módulos ao trocar cliente no modal
+    modalClientSelect.addEventListener('change', (e) => {
+        populateModuleList(e.target.value);
+    });
 
     window.addEventListener('click', (event) => { 
         if (event.target == deleteModal) closeDeleteModal(); 
@@ -246,73 +260,99 @@ function selectMode(modeValue, modeDisplayName) {
 }
 
 // ============================================================================
-// LÓGICA DE MÓDULOS (PRE-MONTAGEM) - ALTERAÇÃO SOLICITADA
+// LÓGICA DE MÓDULOS (PRE-MONTAGEM) - ALTERAÇÃO COMPLETA
 // ============================================================================
-function openModuleModal() {
-    let partsToScan = pecasEmMemoria;
-    
-    // Se temos um cliente focado, filtrar por ele.
-    if (currentClienteAmbiente) {
-        partsToScan = pecasEmMemoria.filter(p => extractClienteAmbiente(p) === currentClienteAmbiente);
-    } 
 
-    if (partsToScan.length === 0) {
-        alert("Nenhuma peça carregada ou cliente não identificado. Bipe uma peça primeiro ou atualize a lista.");
+function extractSafeValue(val) {
+    // Helper para extrair valor de arrays (LKP) ou strings
+    if (Array.isArray(val) && val.length > 0) return String(val[0]).trim();
+    if (val) return String(val).trim();
+    return "";
+}
+
+function openModuleModal() {
+    if (pecasEmMemoria.length === 0) {
+        alert("Nenhuma peça carregada. Atualize a lista primeiro.");
         return;
     }
 
-    // 1. Agrupar peças por módulo e calcular status
-    // Objeto estrutura: { "NomeModulo": { total: 0, done: 0 } }
+    // 1. Extrair Lista Única de Clientes (Coluna NOME_CLIENTE_FABRICANDO_LKP)
+    const clientesSet = new Set();
+    pecasEmMemoria.forEach(p => {
+        const cli = extractSafeValue(p[FIELD_CLIENTE_FABRICANDO]);
+        if (cli) clientesSet.add(cli);
+    });
+
+    const clientesOrdenados = Array.from(clientesSet).sort();
+
+    // 2. Preencher o Select de Clientes
+    modalClientSelect.innerHTML = '<option value="">-- Selecione o Cliente --</option>';
+    clientesOrdenados.forEach(cli => {
+        const option = document.createElement('option');
+        option.value = cli;
+        option.textContent = cli;
+        modalClientSelect.appendChild(option);
+    });
+
+    // 3. Limpar lista de módulos e abrir modal
+    moduleListContainer.innerHTML = '<li style="text-align: center; color: #888; padding: 20px;">Selecione um cliente acima...</li>';
+    
+    // Se já tiver um filtro ativo, pré-selecionar
+    if (selectedClientFilter && clientesSet.has(selectedClientFilter)) {
+        modalClientSelect.value = selectedClientFilter;
+        populateModuleList(selectedClientFilter); // Carrega módulos
+    }
+
+    moduleModal.style.display = "block";
+}
+
+function populateModuleList(clienteSelecionado) {
+    moduleListContainer.innerHTML = '';
+    
+    if (!clienteSelecionado) {
+        moduleListContainer.innerHTML = '<li style="text-align: center; color: #888;">Selecione um cliente acima...</li>';
+        return;
+    }
+
+    // 1. Filtrar peças APENAS DO CLIENTE SELECIONADO
+    const pecasDoCliente = pecasEmMemoria.filter(p => extractSafeValue(p[FIELD_CLIENTE_FABRICANDO]) === clienteSelecionado);
+
+    if (pecasDoCliente.length === 0) {
+        moduleListContainer.innerHTML = '<li>Nenhuma peça encontrada para este cliente.</li>';
+        return;
+    }
+
+    // 2. Agrupar por Módulo (AMBIENTE_COMPLETO_TXT)
     const moduleStats = {};
-
-    partsToScan.forEach(p => {
+    pecasDoCliente.forEach(p => {
         const modName = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)";
-        
-        if (!moduleStats[modName]) {
-            moduleStats[modName] = { total: 0, done: 0 };
-        }
-
+        if (!moduleStats[modName]) moduleStats[modName] = { total: 0, done: 0 };
         moduleStats[modName].total++;
-
-        // Verifica se já foi bipado na pré-montagem (Campo BIPAGEM_PREMONTAGEM_TXT tem valor)
         if (p[FIELD_STATUS_PREMONTAGEM_TXT] && p[FIELD_STATUS_PREMONTAGEM_TXT].trim() !== '') {
             moduleStats[modName].done++;
         }
     });
 
-    // 2. Filtrar módulos que NÃO estão 100% concluídos
-    const incompleteModules = Object.keys(moduleStats).filter(modName => {
-        const stats = moduleStats[modName];
-        // Retorna true (mostra na lista) apenas se 'done' for menor que 'total'
-        return stats.done < stats.total;
-    }).sort();
-
-    // Se não houver módulos incompletos, avisa o usuário
-    if (incompleteModules.length === 0) {
-        alert("Todos os módulos deste ambiente já foram concluídos na Pré-montagem!");
-        return;
-    }
-
-    // 3. Renderizar Lista
-    moduleListContainer.innerHTML = '';
-    incompleteModules.forEach((modName, index) => {
+    // 3. Renderizar Checkboxes
+    const modulesNames = Object.keys(moduleStats).sort();
+    
+    modulesNames.forEach((modName, index) => {
         const stats = moduleStats[modName];
         const li = document.createElement('li');
-        const isChecked = selectedModules.includes(modName);
         
-        // Opcional: Mostrar progresso (ex: 2/10) no label para ajudar
+        // Verifica se estava selecionado anteriormente (se o cliente for o mesmo)
+        const isChecked = (selectedClientFilter === clienteSelecionado && selectedModules.includes(modName));
         const progressLabel = `<span style="font-size: 0.8em; color: #888; margin-left: 5px;">(${stats.done}/${stats.total})</span>`;
+        
+        // Estilo riscado se completo
+        const style = (stats.done >= stats.total && stats.total > 0) ? 'color: var(--status-online); text-decoration: line-through;' : '';
 
         li.innerHTML = `
             <input type="checkbox" id="mod-${index}" value="${modName}" ${isChecked ? 'checked' : ''}>
-            <label for="mod-${index}">${modName} ${progressLabel}</label>
+            <label for="mod-${index}" style="${style}">${modName} ${progressLabel}</label>
         `;
         moduleListContainer.appendChild(li);
     });
-
-    moduleModal.style.display = "block";
-    moduleSearchInput.value = '';
-    moduleSearchInput.focus();
 }
 
 function closeModuleModal() {
@@ -336,19 +376,41 @@ function selectAllModulesInModal() {
 }
 
 function confirmModuleSelection() {
+    const cliente = modalClientSelect.value;
+    if (!cliente) {
+        alert("Por favor, selecione um Cliente.");
+        return;
+    }
+
     const checkboxes = moduleListContainer.querySelectorAll('input[type="checkbox"]:checked');
-    selectedModules = Array.from(checkboxes).map(cb => cb.value);
+    const modulos = Array.from(checkboxes).map(cb => cb.value);
+
+    if (modulos.length === 0) {
+        if(!confirm("Nenhum módulo selecionado. Deseja limpar o filtro?")) return;
+        selectedClientFilter = null;
+        selectedModules = [];
+    } else {
+        selectedClientFilter = cliente;
+        selectedModules = modulos;
+    }
     
     closeModuleModal();
-    updateProgressUI(); 
-    
-    if (selectedModules.length > 0) {
-        displayFeedback(`Filtro aplicado: ${selectedModules.length} módulos selecionados.`, 'success');
-        activeFilterDisplay.textContent = `Filtro Ativo: ${selectedModules.length} Módulos selecionados`;
+    updateFilterUI();
+    updateProgressUI();
+}
+
+function updateFilterUI() {
+    if (selectedClientFilter) {
+        // Atualiza cabeçalho com o cliente selecionado
+        if(currentClienteDisplayEl) currentClienteDisplayEl.textContent = selectedClientFilter;
+        
+        activeFilterDisplay.innerHTML = `Filtro: <strong>${selectedClientFilter}</strong> <br> ${selectedModules.length} Módulos ativos`;
         activeFilterDisplay.style.display = 'block';
+        displayFeedback(`Filtro Aplicado: ${selectedModules.length} módulos de ${selectedClientFilter}`, 'success');
     } else {
-        displayFeedback('Filtro removido. Mostrando tudo pendente.', 'info');
+        if(currentClienteDisplayEl) currentClienteDisplayEl.textContent = "--";
         activeFilterDisplay.style.display = 'none';
+        displayFeedback('Filtro removido. Selecione um cliente para trabalhar.', 'info');
     }
 }
 
@@ -396,7 +458,7 @@ function extractClienteAmbiente(peca) {
 }
 
 // ============================================================================
-// LÓGICA PRINCIPAL DE BIPAGEM - ALTERAÇÃO SOLICITADA (BLOQUEIO)
+// LÓGICA PRINCIPAL DE BIPAGEM - ATUALIZADA COM FILTRO RÍGIDO
 // ============================================================================
 async function handleScan(event) {
     event.preventDefault();
@@ -422,39 +484,52 @@ async function handleScan(event) {
     if (pecaEncontrada) {
         const codigoPrincipalPeca = pecaEncontrada[FIELD_CODIGO_BIPAGEM] || barcodeBipado;
         const nomePeca = pecaEncontrada[FIELD_NOME_PECA] || 'Nome não encontrado';
-        const pecaClienteAmbiente = extractClienteAmbiente(pecaEncontrada);
+        
+        // Dados para validação de filtro
+        const pecaClienteFilter = extractSafeValue(pecaEncontrada[FIELD_CLIENTE_FABRICANDO]);
         const pecaModulo = pecaEncontrada[FIELD_AMBIENTE_COMPLETO] ? String(pecaEncontrada[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)";
 
-        // Atualiza contexto de Cliente
+        // Atualiza contexto visual (legado)
+        const pecaClienteAmbiente = extractClienteAmbiente(pecaEncontrada);
         if (pecaClienteAmbiente !== currentClienteAmbiente) {
             currentClienteAmbiente = pecaClienteAmbiente;
-            currentClienteAmbienteDisplayEl.textContent = currentClienteAmbiente;
-            if (selectedMode !== 'rebalho') updateProgressUI();
+            // Apenas atualiza o display se não houver um filtro de cliente fixo ativo que sobrescreva
+            if(!selectedClientFilter && currentClienteDisplayEl) currentClienteDisplayEl.textContent = currentClienteAmbiente;
         }
 
         const isReq = isProcessRequired(pecaEncontrada, selectedMode);
         const isDone = isProcessDone(pecaEncontrada, selectedMode);
 
         // ============================================================
-        // VERIFICAÇÃO RÍGIDA DE MÓDULO (PRE-MONTAGEM)
+        // VERIFICAÇÃO RÍGIDA (PRE-MONTAGEM) - NOVO FLUXO
         // ============================================================
-        // Se estiver em premontagem E houver filtro de módulos ativos
-        if (selectedMode === 'premontagem' && selectedModules.length > 0) {
-            if (!selectedModules.includes(pecaModulo)) {
-                // BLOQUEIO TOTAL
-                feedbackType = 'error';
-                feedbackMessage = `BLOQUEADO: Peça do módulo "${pecaModulo}" não selecionado!`;
-                
-                // Tocar som ou vibração se possível (opcional)
+        if (selectedMode === 'premontagem') {
+            
+            // 1. OBRIGATÓRIO TER FILTRO SELECIONADO
+            if (!selectedClientFilter || selectedModules.length === 0) {
+                feedbackMessage = `BLOQUEADO: Selecione "Cliente e Módulos" no botão cinza antes de bipar!`;
                 if(navigator.vibrate) navigator.vibrate([100, 50, 100]);
-                
-                scanShouldBeSaved = false; // Não permite salvar
-                
-                // Interrompe o fluxo e exibe erro
-                displayFeedback(feedbackMessage, feedbackType);
+                displayFeedback(feedbackMessage, 'error');
                 barcodeInput.value = ''; 
-                barcodeInput.focus();
-                return; 
+                return;
+            }
+
+            // 2. VALIDA CLIENTE
+            if (pecaClienteFilter !== selectedClientFilter) {
+                feedbackMessage = `BLOQUEADO: Peça do cliente "${pecaClienteFilter}", mas o filtro é "${selectedClientFilter}"`;
+                if(navigator.vibrate) navigator.vibrate([100, 50, 100]);
+                displayFeedback(feedbackMessage, 'error');
+                barcodeInput.value = ''; 
+                return;
+            }
+
+            // 3. VALIDA MÓDULO
+            if (!selectedModules.includes(pecaModulo)) {
+                feedbackMessage = `BLOQUEADO: Módulo "${pecaModulo}" não selecionado no filtro!`;
+                if(navigator.vibrate) navigator.vibrate([100, 50, 100]);
+                displayFeedback(feedbackMessage, 'error');
+                barcodeInput.value = ''; 
+                return;
             }
         }
         // ============================================================
@@ -473,13 +548,13 @@ async function handleScan(event) {
                 scanShouldBeSaved = false;
             }
         } 
-        else if (isDone) {
+        else if (isDone && selectedMode !== 'rebalho') {
             feedbackType = 'warning'; 
             feedbackMessage = `AVISO: ${selectedMode.toUpperCase()} para [${nomePeca}] já foi registrado.`; 
             scanShouldBeSaved = false;
         } 
         else {
-            // SUCESSO (Fluxo Normal)
+            // SUCESSO
             scanShouldBeSaved = true;
             sessionScanCount++; updateSessionCounterUI();
 
@@ -512,8 +587,8 @@ async function handleScan(event) {
                 pecaId: pecaEncontrada[FIELD_CODIGO_BIPAGEM], 
                 timestamp: new Date().toISOString(), 
                 mode: selectedMode, 
-                encontrada: !!pecaEncontrada, 
-                clienteAmbiente: currentClienteAmbiente 
+                encontrada: true, 
+                clienteAmbiente: extractSafeValue(pecaEncontrada[FIELD_CLIENTE_FABRICANDO]) // Salva o cliente correto
             });
         } catch (error) { console.error("Erro ao adicionar scan pendente:", error); displayFeedback(`Erro salvar scan: ${error.message}`, 'error'); }
     }
@@ -551,8 +626,8 @@ async function syncPecasCache(isSilent = false) {
         pecas.forEach((p) => {
             if (typeof p !== 'object' || p === null) return;
             const codigo = p[FIELD_CODIGO_BIPAGEM] ? String(p[FIELD_CODIGO_BIPAGEM]).trim() : null;
-            const clienteAmb = p[FIELD_CLIENTE_AMBIENTE];
-            if (codigo && codigo !== '' && clienteAmb && Array.isArray(clienteAmb) && clienteAmb.length > 0) {
+            // Validação menos restritiva de ambiente para não quebrar outras lógicas
+            if (codigo && codigo !== '') {
                 pecasValidas.push(p);
             }
         });
@@ -780,41 +855,52 @@ function revertOptimisticUpdate(pecaId, mode) {
 function updateProgressUI() {
     if (currentMode === 'rebalho') return;
 
-    const clienteAmbiente = currentClienteAmbiente;
     const mode = currentMode;
     const modeDisplay = currentModeDisplay;
 
-    if (!clienteAmbiente || !mode || pecasEmMemoria.length === 0) {
+    if (!mode || pecasEmMemoria.length === 0) {
         progressSection.style.display = 'none'; return;
     }
     
-    // 1. Filtro Básico: Peças do Cliente Atual
-    let pecasDoGrupo = pecasEmMemoria.filter(p => extractClienteAmbiente(p) === clienteAmbiente);
-    
-    // 2. Filtro Secundário: Módulos Selecionados (Apenas se em pre-montagem e houver seleção)
-    let textoModulo = "";
-    if (mode === 'premontagem' && selectedModules.length > 0) {
-        pecasDoGrupo = pecasDoGrupo.filter(p => {
-             const mod = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)";
-             return selectedModules.includes(mod);
+    // 1. Filtrar Escopo
+    let pecasEscopo = pecasEmMemoria;
+    let textoFiltro = "";
+
+    // SE ESTIVER EM PRE-MONTAGEM COM FILTRO ATIVO, CALCULAR PROGRESSO SOBRE O FILTRO
+    if (currentMode === 'premontagem' && selectedClientFilter) {
+        pecasEscopo = pecasEscopo.filter(p => {
+            const mesmoCli = extractSafeValue(p[FIELD_CLIENTE_FABRICANDO]) === selectedClientFilter;
+            const mesmoMod = selectedModules.includes(p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)");
+            return mesmoCli && mesmoMod;
         });
-        textoModulo = ` [${selectedModules.length} Módulos Filtrados]`;
+        textoFiltro = " [Filtro Ativo]";
+    } else if (currentMode === 'premontagem') {
+        // Se for pre-montagem mas sem filtro, não mostra progresso para não confundir com números gigantes
+        progressSection.style.display = 'none';
+        return;
+    } else {
+        // OUTROS MODOS: Usa o filtro visual de ambiente se houver (lógica antiga)
+        if(currentClienteAmbiente) {
+             pecasEscopo = pecasEscopo.filter(p => extractClienteAmbiente(p) === currentClienteAmbiente);
+        }
     }
 
-    const pecasRequeridas = pecasDoGrupo.filter(p => isProcessRequired(p, mode));
+    const pecasRequeridas = pecasEscopo.filter(p => isProcessRequired(p, mode));
     const pecasFeitas = pecasRequeridas.filter(p => isProcessDone(p, mode));
     const totalRequeridas = pecasRequeridas.length;
     const totalFeitas = pecasFeitas.length;
 
     if (totalRequeridas === 0) {
-        progressText.textContent = `${modeDisplay}: Nenhuma peça requer este serviço (neste filtro).`;
+        if(currentMode === 'premontagem') {
+             progressText.textContent = `Aguardando seleção de filtro...`;
+        } else {
+             progressText.textContent = `${modeDisplay}: Nenhuma peça requer este serviço.`;
+        }
         progressBar.style.width = '0%';
-        progressBar.style.backgroundColor = MODE_COLORS.default;
         progressSection.style.display = 'block';
     } else {
         const percentage = totalRequeridas > 0 ? (totalFeitas / totalRequeridas) * 100 : 0;
-        const clienteAmbTrunc = clienteAmbiente.length > 40 ? clienteAmbiente.substring(0, 37) + '...' : clienteAmbiente;
-        progressText.textContent = `${modeDisplay}: ${totalFeitas} / ${totalRequeridas} (${percentage.toFixed(0)}%)${textoModulo}`;
+        progressText.textContent = `${modeDisplay}: ${totalFeitas} / ${totalRequeridas} (${percentage.toFixed(0)}%)${textoFiltro}`;
         progressBar.style.width = percentage + '%';
         progressBar.style.backgroundColor = MODE_COLORS[mode] || MODE_COLORS.default;
         progressSection.style.display = 'block';
@@ -848,7 +934,9 @@ async function updateUI() {
                 const isRework = scan.mode === 'rebalho';
                 const statusIcon = isRework ? '⚠' : (scan.encontrada ? '✔️' : '❓');
                 const statusClass = scan.encontrada ? 'success' : 'error';
-                const clienteAmbienteTag = scan.clienteAmbiente ? `<span class="cliente-tag">${scan.clienteAmbiente.substring(0, 30)}...</span>` : '';
+                // Mostra o cliente (novo ou antigo campo)
+                const displayCliente = scan.clienteAmbiente || scan.cliente || 'Desconhecido';
+                const clienteAmbienteTag = displayCliente ? `<span class="cliente-tag">${displayCliente.substring(0, 30)}...</span>` : '';
                 
                 let modeTag = '';
                 if (isRework) modeTag = `<span class="mode-tag" style="color:var(--rebalho-color); font-weight:bold;">RETRABALHO</span>`;
