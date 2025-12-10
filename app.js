@@ -325,7 +325,12 @@ function populateModuleList(clienteSelecionado) {
     // 2. Agrupar por Módulo (AMBIENTE_COMPLETO_TXT)
     const moduleStats = {};
     pecasDoCliente.forEach(p => {
-        const modName = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)";
+        // --- [ALTERADO: 3 DIGITOS] ---
+        // Pega o valor completo
+        const rawModName = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "";
+        // Se existir texto, pega só os 3 primeiros chars. Se não, marca como indefinido.
+        const modName = rawModName.length > 0 ? rawModName.substring(0, 3) : "(Sem Módulo Definido)";
+        
         if (!moduleStats[modName]) moduleStats[modName] = { total: 0, done: 0 };
         moduleStats[modName].total++;
         if (p[FIELD_STATUS_PREMONTAGEM_TXT] && p[FIELD_STATUS_PREMONTAGEM_TXT].trim() !== '') {
@@ -404,9 +409,9 @@ function updateFilterUI() {
         // Atualiza cabeçalho com o cliente selecionado
         if(currentClienteDisplayEl) currentClienteDisplayEl.textContent = selectedClientFilter;
         
-        activeFilterDisplay.innerHTML = `Filtro: <strong>${selectedClientFilter}</strong> <br> ${selectedModules.length} Módulos ativos`;
+        activeFilterDisplay.innerHTML = `Filtro: <strong>${selectedClientFilter}</strong> <br> ${selectedModules.length} Códigos (3 dígitos) ativos`;
         activeFilterDisplay.style.display = 'block';
-        displayFeedback(`Filtro Aplicado: ${selectedModules.length} módulos de ${selectedClientFilter}`, 'success');
+        displayFeedback(`Filtro Aplicado: ${selectedModules.length} grupos de ${selectedClientFilter}`, 'success');
     } else {
         if(currentClienteDisplayEl) currentClienteDisplayEl.textContent = "--";
         activeFilterDisplay.style.display = 'none';
@@ -487,7 +492,11 @@ async function handleScan(event) {
         
         // Dados para validação de filtro
         const pecaClienteFilter = extractSafeValue(pecaEncontrada[FIELD_CLIENTE_FABRICANDO]);
-        const pecaModulo = pecaEncontrada[FIELD_AMBIENTE_COMPLETO] ? String(pecaEncontrada[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)";
+        
+        // --- [ALTERADO: 3 DIGITOS] ---
+        // Extrai os 3 digitos da peça encontrada para comparar com o filtro
+        const rawPecaModulo = pecaEncontrada[FIELD_AMBIENTE_COMPLETO] ? String(pecaEncontrada[FIELD_AMBIENTE_COMPLETO]).trim() : "";
+        const pecaModulo = rawPecaModulo.length > 0 ? rawPecaModulo.substring(0, 3) : "(Sem Módulo Definido)";
 
         // Atualiza contexto visual (legado)
         const pecaClienteAmbiente = extractClienteAmbiente(pecaEncontrada);
@@ -523,9 +532,9 @@ async function handleScan(event) {
                 return;
             }
 
-            // 3. VALIDA MÓDULO
+            // 3. VALIDA MÓDULO (USANDO 3 DIGITOS)
             if (!selectedModules.includes(pecaModulo)) {
-                feedbackMessage = `BLOQUEADO: Módulo "${pecaModulo}" não selecionado no filtro!`;
+                feedbackMessage = `BLOQUEADO: Início "${pecaModulo}" não selecionado no filtro!`;
                 if(navigator.vibrate) navigator.vibrate([100, 50, 100]);
                 displayFeedback(feedbackMessage, 'error');
                 barcodeInput.value = ''; 
@@ -870,7 +879,13 @@ function updateProgressUI() {
     if (currentMode === 'premontagem' && selectedClientFilter) {
         pecasEscopo = pecasEscopo.filter(p => {
             const mesmoCli = extractSafeValue(p[FIELD_CLIENTE_FABRICANDO]) === selectedClientFilter;
-            const mesmoMod = selectedModules.includes(p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo Definido)");
+            
+            // --- [ALTERADO: 3 DIGITOS] ---
+            // Verifica se os 3 primeiros dígitos do ambiente batem com a seleção
+            const rawModPeca = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "";
+            const modPeca = rawModPeca.length > 0 ? rawModPeca.substring(0, 3) : "(Sem Módulo Definido)";
+            const mesmoMod = selectedModules.includes(modPeca);
+            
             return mesmoCli && mesmoMod;
         });
         textoFiltro = " [Filtro Ativo]";
