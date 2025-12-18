@@ -2,6 +2,7 @@
 // CONFIGURAÇÃO
 // ============================================================================
 const N8N_GET_PECAS_URL = 'http://192.168.18.190:5678/webhook/da1a3dc7-b5ca-46ff-9ced-600102b22bec';
+const N8N_BUSCA_UNICA_URL = 'http://192.168.18.190:5678/webhook/buscar-peca-unica'; // NOVO WEBHOOK PARA URGÊNCIAS
 const N8N_POST_SCANS_URL = 'http://192.168.18.190:5678/webhook/dd0a9938-fd80-4308-8ecc-c317b61a032e'; 
 const N8N_POST_RETRABALHO_URL = 'http://192.168.18.190:5678/webhook/571327b7-0de9-46ac-b5ae-e7e645134380'; 
 
@@ -14,27 +15,20 @@ const FIELD_CODIGO_USI_2 = 'CODIGO_BIPAGEM_USI_2_TXT';
 const FIELD_CODIGO_USI_3 = 'CODIGO_BIPAGEM_USI_3_TXT'; 
 
 const FIELD_NOME_PECA = 'CHAVE_PEÇAS_FX';
-const FIELD_CLIENTE_AMBIENTE = 'CLIENTE_AMBIENTE_LKP'; // Mantido para retrocompatibilidade visual
+const FIELD_CLIENTE_AMBIENTE = 'CLIENTE_AMBIENTE_LKP'; 
 const FIELD_NOME_MAQUINA_LKP = 'NOME_MAQUINA_LKP'; 
-
-// --- [ALTERADO] Campo para Filtro de Cliente Solicitado (Agora aponta para CLIENTE_AMBIENTE_LKP) ---
 const FIELD_CLIENTE_FABRICANDO = 'CLIENTE_AMBIENTE_LKP';
-
-// --- [ALTERADO] Campo de Módulo (Agora aponta para ITEM+MODULO_FX) ---
 const FIELD_AMBIENTE_COMPLETO = 'ITEM+MODULO_FX';
 
-// Campos de Requisito
 const FIELD_REQ_FILETACAO = 'PEÇA_FILETAÇÃO_NUM';
 const FIELD_REQ_CNC = 'PEÇA_USINAGEM_CNC_NUM';
 
-// Campos de Status (Conclusão)
 const FIELD_STATUS_NEST_TXT = 'BIPAGEM_NEST_TXT';
 const FIELD_STATUS_SECC_TXT = 'BIPAGEM_SECC_TXT';
 const FIELD_STATUS_COLADEIRA_TXT = 'BIPAGEM_COLADEIRA_TXT';
 const FIELD_STATUS_HOLZER_TXT = 'BIPAGEM_HOLZER_TXT';
 const FIELD_STATUS_PREMONTAGEM_TXT = 'BIPAGEM_PREMONTAGEM_TXT'; 
 
-// Cores dos Serviços
 const MODE_COLORS = {
     nesting: 'var(--nesting-color)',
     seccionadora: 'var(--seccionadora-color)',
@@ -49,17 +43,17 @@ const MODE_COLORS = {
 // VARIÁVEIS GLOBAIS DE ESTADO
 // ============================================================================
 let pecasEmMemoria = [];
+let pecasMap = new Map(); // [ADICIONADO] Para busca ultra-rápida O(1)
 let sessionScanCount = 0;
 let currentMode = null;
 let currentModeDisplay = 'Nenhum';
-let currentClienteAmbiente = null; // Visual
+let currentClienteAmbiente = null; 
 let feedbackTimer = null;
 let isCacheSyncing = false; 
 let isScanSyncing = false; 
 
-// --- Variáveis de Filtro ---
-let selectedClientFilter = null; // Armazena o cliente selecionado
-let selectedModules = [];        // Armazena os módulos selecionados
+let selectedClientFilter = null; 
+let selectedModules = [];        
 
 // ============================================================================
 // MAPEAMENTO DOS ELEMENTOS DA INTERFACE (DOM)
@@ -83,7 +77,6 @@ const progressSection = document.getElementById('progress-section');
 const progressBar = document.getElementById('progress-bar');
 const progressText = document.getElementById('progress-text');
 
-// Elementos de Modais e Menu
 const deleteModal = document.getElementById('delete-modal');
 const closeDeleteModalBtn = document.getElementById('close-delete-modal');
 const pendingScansListDelete = document.getElementById('pending-scans-list-delete');
@@ -98,7 +91,6 @@ const btnManagePending = document.getElementById('btn-manage-pending');
 const btnClearCache = document.getElementById('btn-clear-cache');
 const btnChangeService = document.getElementById('btn-change-service');
 
-// Elementos de Módulos
 const premontagemControls = document.getElementById('premontagem-controls');
 const btnSelectModules = document.getElementById('btn-select-modules');
 const moduleModal = document.getElementById('module-modal');
@@ -148,11 +140,9 @@ function showInterface(interfaceToShow) {
             currentModeDisplayEl.style.color = MODE_COLORS[currentMode] || MODE_COLORS.default;
         }
 
-        // Mostrar controle de módulos apenas se for pre-montagem
         if (currentMode === 'premontagem') {
             premontagemControls.style.display = 'block';
             if(!selectedClientFilter) {
-                 // Feedback inicial para lembrar de selecionar
                  displayFeedback("ATENÇÃO: Selecione Cliente e Item/Módulo para iniciar.", "warning");
             }
         }
@@ -184,17 +174,12 @@ function resetSelections() {
     currentModeDisplay = 'Nenhum';
     currentClienteAmbiente = null;
     sessionScanCount = 0;
-    
-    // Reset Filtros
     selectedClientFilter = null;
     selectedModules = []; 
     activeFilterDisplay.style.display = 'none';
     if(currentClienteDisplayEl) currentClienteDisplayEl.textContent = '--';
 }
 
-// ============================================================================
-// CONTROLE DA SIDEBAR E MODAIS
-// ============================================================================
 function openSidebar() { sidebarNav.classList.add('open'); sidebarOverlay.classList.add('open'); }
 function closeSidebar() { sidebarNav.classList.remove('open'); sidebarOverlay.classList.remove('open'); }
 
@@ -224,14 +209,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnDeleteSelected.addEventListener('click', deleteSelectedScans);
     btnDeleteAllPending.addEventListener('click', clearAllPendingScans);
 
-    // Eventos do Modal de Módulos
     btnSelectModules.addEventListener('click', openModuleModal);
     closeModuleModalBtn.addEventListener('click', closeModuleModal);
     btnConfirmModules.addEventListener('click', confirmModuleSelection);
     btnSelectAllModules.addEventListener('click', selectAllModulesInModal);
     moduleSearchInput.addEventListener('keyup', filterModuleList);
     
-    // Evento para carregar módulos ao trocar cliente no modal
     modalClientSelect.addEventListener('change', (e) => {
         populateModuleList(e.target.value);
     });
@@ -247,7 +230,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadPecasFromDbToMemory();
     await updateUI();
 
-    // Timers
     setInterval(async () => { if (!navigator.onLine || isCacheSyncing) return; await syncPecasCache(true); }, 300000); 
     setInterval(async () => { if (!navigator.onLine || isScanSyncing) return; await syncPendingScans(true); }, 600000); 
 });
@@ -260,11 +242,9 @@ function selectMode(modeValue, modeDisplayName) {
 }
 
 // ============================================================================
-// LÓGICA DE MÓDULOS (PRE-MONTAGEM) - ALTERADA PARA ITEM+MODULO
+// LÓGICA DE MÓDULOS (PRE-MONTAGEM)
 // ============================================================================
-
 function extractSafeValue(val) {
-    // Helper para extrair valor de arrays (LKP) ou strings
     if (Array.isArray(val) && val.length > 0) return String(val[0]).trim();
     if (val) return String(val).trim();
     return "";
@@ -275,17 +255,12 @@ function openModuleModal() {
         alert("Nenhuma peça carregada. Atualize a lista primeiro.");
         return;
     }
-
-    // 1. Extrair Lista Única de Clientes (Coluna CLIENTE_AMBIENTE_LKP via constante)
     const clientesSet = new Set();
     pecasEmMemoria.forEach(p => {
         const cli = extractSafeValue(p[FIELD_CLIENTE_FABRICANDO]);
         if (cli) clientesSet.add(cli);
     });
-
     const clientesOrdenados = Array.from(clientesSet).sort();
-
-    // 2. Preencher o Select de Clientes
     modalClientSelect.innerHTML = '<option value="">-- Selecione o Cliente --</option>';
     clientesOrdenados.forEach(cli => {
         const option = document.createElement('option');
@@ -293,64 +268,42 @@ function openModuleModal() {
         option.textContent = cli;
         modalClientSelect.appendChild(option);
     });
-
-    // 3. Limpar lista de módulos e abrir modal
     moduleListContainer.innerHTML = '<li style="text-align: center; color: #888; padding: 20px;">Selecione um cliente acima...</li>';
-    
-    // Se já tiver um filtro ativo, pré-selecionar
     if (selectedClientFilter && clientesSet.has(selectedClientFilter)) {
         modalClientSelect.value = selectedClientFilter;
-        populateModuleList(selectedClientFilter); // Carrega módulos
+        populateModuleList(selectedClientFilter); 
     }
-
     moduleModal.style.display = "block";
 }
 
 function populateModuleList(clienteSelecionado) {
     moduleListContainer.innerHTML = '';
-    
     if (!clienteSelecionado) {
         moduleListContainer.innerHTML = '<li style="text-align: center; color: #888;">Selecione um cliente acima...</li>';
         return;
     }
-
-    // 1. Filtrar peças APENAS DO CLIENTE SELECIONADO
     const pecasDoCliente = pecasEmMemoria.filter(p => extractSafeValue(p[FIELD_CLIENTE_FABRICANDO]) === clienteSelecionado);
-
     if (pecasDoCliente.length === 0) {
         moduleListContainer.innerHTML = '<li>Nenhuma peça encontrada para este cliente.</li>';
         return;
     }
-
-    // 2. Agrupar por ITEM+MODULO (FIELD_AMBIENTE_COMPLETO)
     const moduleStats = {};
     pecasDoCliente.forEach(p => {
-        // --- [ALTERADO: USO DO VALOR COMPLETO DO ITEM+MODULO] ---
         const rawModName = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "";
-        // Pega o valor exato, sem cortar 3 digitos, para separar corretamente ITEM e MODULO
         const modName = rawModName.length > 0 ? rawModName : "(Sem Item/Módulo Definido)";
-        
         if (!moduleStats[modName]) moduleStats[modName] = { total: 0, done: 0 };
         moduleStats[modName].total++;
         if (p[FIELD_STATUS_PREMONTAGEM_TXT] && p[FIELD_STATUS_PREMONTAGEM_TXT].trim() !== '') {
             moduleStats[modName].done++;
         }
     });
-
-    // 3. Renderizar Checkboxes
     const modulesNames = Object.keys(moduleStats).sort();
-    
     modulesNames.forEach((modName, index) => {
         const stats = moduleStats[modName];
         const li = document.createElement('li');
-        
-        // Verifica se estava selecionado anteriormente (se o cliente for o mesmo)
         const isChecked = (selectedClientFilter === clienteSelecionado && selectedModules.includes(modName));
         const progressLabel = `<span style="font-size: 0.8em; color: #888; margin-left: 5px;">(${stats.done}/${stats.total})</span>`;
-        
-        // Estilo riscado se completo
         const style = (stats.done >= stats.total && stats.total > 0) ? 'color: var(--status-online); text-decoration: line-through;' : '';
-
         li.innerHTML = `
             <input type="checkbox" id="mod-${index}" value="${modName}" ${isChecked ? 'checked' : ''}>
             <label for="mod-${index}" style="${style}">${modName} ${progressLabel}</label>
@@ -359,9 +312,7 @@ function populateModuleList(clienteSelecionado) {
     });
 }
 
-function closeModuleModal() {
-    moduleModal.style.display = "none";
-}
+function closeModuleModal() { moduleModal.style.display = "none"; }
 
 function filterModuleList() {
     const term = moduleSearchInput.value.toLowerCase();
@@ -381,14 +332,9 @@ function selectAllModulesInModal() {
 
 function confirmModuleSelection() {
     const cliente = modalClientSelect.value;
-    if (!cliente) {
-        alert("Por favor, selecione um Cliente.");
-        return;
-    }
-
+    if (!cliente) { alert("Por favor, selecione um Cliente."); return; }
     const checkboxes = moduleListContainer.querySelectorAll('input[type="checkbox"]:checked');
     const modulos = Array.from(checkboxes).map(cb => cb.value);
-
     if (modulos.length === 0) {
         if(!confirm("Nenhum item/módulo selecionado. Deseja limpar o filtro?")) return;
         selectedClientFilter = null;
@@ -397,7 +343,6 @@ function confirmModuleSelection() {
         selectedClientFilter = cliente;
         selectedModules = modulos;
     }
-    
     closeModuleModal();
     updateFilterUI();
     updateProgressUI();
@@ -405,9 +350,7 @@ function confirmModuleSelection() {
 
 function updateFilterUI() {
     if (selectedClientFilter) {
-        // Atualiza cabeçalho com o cliente selecionado
         if(currentClienteDisplayEl) currentClienteDisplayEl.textContent = selectedClientFilter;
-        
         activeFilterDisplay.innerHTML = `Filtro: <strong>${selectedClientFilter}</strong> <br> ${selectedModules.length} Itens/Módulos ativos`;
         activeFilterDisplay.style.display = 'block';
         displayFeedback(`Filtro Aplicado: ${selectedModules.length} itens de ${selectedClientFilter}`, 'success');
@@ -418,19 +361,16 @@ function updateFilterUI() {
     }
 }
 
-
 // ============================================================================
 // FUNÇÕES AUXILIARES DE VERIFICAÇÃO E EXTRAÇÃO
 // ============================================================================
 function isProcessRequired(peca, mode) {
     if (!peca) return false;
     if (mode === 'rebalho') return true;
-
     const maquinaContains = (text) => 
         peca[FIELD_NOME_MAQUINA_LKP] && Array.isArray(peca[FIELD_NOME_MAQUINA_LKP])
         ? peca[FIELD_NOME_MAQUINA_LKP].some(m => String(m).toUpperCase().includes(text.toUpperCase()))
         : false;
-
     switch (mode) {
         case 'nesting': return maquinaContains("NANXING - NESTING");
         case 'seccionadora': return maquinaContains("SECCIONADORA");
@@ -444,7 +384,6 @@ function isProcessRequired(peca, mode) {
 function isProcessDone(peca, mode) {
     if (!peca) return false;
     if (mode === 'rebalho') return false;
-
     switch (mode) {
         case 'nesting':       return !!(peca?.[FIELD_STATUS_NEST_TXT]?.trim());
         case 'seccionadora':  return !!(peca?.[FIELD_STATUS_SECC_TXT]?.trim());
@@ -456,14 +395,31 @@ function isProcessDone(peca, mode) {
 }
 
 function extractClienteAmbiente(peca) {
-    // Agora usando a nova lógica de filtro, esta função é mais para fallback visual se necessário
     if (!peca || !peca[FIELD_CLIENTE_AMBIENTE]) return "Desconhecido";
     const clienteAmbienteArray = peca[FIELD_CLIENTE_AMBIENTE];
     return Array.isArray(clienteAmbienteArray) && clienteAmbienteArray.length > 0 ? String(clienteAmbienteArray[0]).trim() : "Desconhecido";
 }
 
 // ============================================================================
-// LÓGICA PRINCIPAL DE BIPAGEM - ATUALIZADA PARA FILTRO ITEM+MODULO
+// [OTIMIZADO] CARREGAMENTO E MAPA DE BUSCA
+// ============================================================================
+async function loadPecasFromDbToMemory() {
+    try {
+        const db = await getDb();
+        pecasEmMemoria = await db.getAll('pecas_cache') || [];
+        
+        // Criar Mapa de busca por todos os códigos possíveis para busca O(1)
+        pecasMap.clear();
+        pecasEmMemoria.forEach(p => {
+            const cods = [p[FIELD_CODIGO_BIPAGEM], p[FIELD_CODIGO_USI_1], p[FIELD_CODIGO_USI_2], p[FIELD_CODIGO_USI_3]];
+            cods.forEach(c => { if(c) pecasMap.set(String(c).trim(), p); });
+        });
+        console.log(`Carregadas ${pecasEmMemoria.length} peças p/ memória.`);
+    } catch (error) { console.error("Erro memória:", error); pecasEmMemoria = []; }
+}
+
+// ============================================================================
+// [OTIMIZADO] LÓGICA DE BIPAGEM COM BUSCA ON-DEMAND
 // ============================================================================
 async function handleScan(event) {
     event.preventDefault();
@@ -473,118 +429,85 @@ async function handleScan(event) {
     if (!selectedMode) { showInterface('menu'); return displayFeedback("ERRO: Selecione um Serviço.", 'error'); }
     if (!barcodeBipado) return barcodeInput.focus();
 
-    let pecaEncontrada = pecasEmMemoria.find(p => {
-        if (!p) return false;
-        if (p[FIELD_CODIGO_BIPAGEM] && String(p[FIELD_CODIGO_BIPAGEM]).trim() === barcodeBipado) return true;
-        if (p[FIELD_CODIGO_USI_1] && String(p[FIELD_CODIGO_USI_1]).trim() === barcodeBipado) return true;
-        if (p[FIELD_CODIGO_USI_2] && String(p[FIELD_CODIGO_USI_2]).trim() === barcodeBipado) return true;
-        if (p[FIELD_CODIGO_USI_3] && String(p[FIELD_CODIGO_USI_3]).trim() === barcodeBipado) return true;
-        return false;
-    });
+    // 1. TENTA BUSCAR NO MAPA LOCAL (ULTRA RÁPIDO)
+    let pecaEncontrada = pecasMap.get(barcodeBipado);
     
+    // 2. BUSCA "ON-DEMAND" SE NÃO ACHOU NO CACHE (Para peças urgentes)
+    if (!pecaEncontrada && navigator.onLine) {
+        displayFeedback("Buscando peça nova no servidor...", "loading");
+        try {
+            const res = await fetch(`${N8N_BUSCA_UNICA_URL}?codigo=${barcodeBipado}`);
+            if (res.ok) {
+                const pUrgente = await res.json();
+                if (pUrgente && pUrgente[FIELD_CODIGO_BIPAGEM]) {
+                    pecaEncontrada = pUrgente;
+                    const db = await getDb();
+                    await db.put('pecas_cache', pUrgente); 
+                    await loadPecasFromDbToMemory(); 
+                }
+            }
+        } catch (e) { console.error("Erro busca urgente:", e); }
+    }
+
+    if (!pecaEncontrada) {
+        displayFeedback(`ERRO: Peça [${barcodeBipado}] não encontrada.`, 'error');
+        barcodeInput.value = ''; return;
+    }
+
+    const codigoPrincipalPeca = pecaEncontrada[FIELD_CODIGO_BIPAGEM] || barcodeBipado;
+    const nomePeca = pecaEncontrada[FIELD_NOME_PECA] || 'Nome não encontrado';
+    const pecaClienteFilter = extractSafeValue(pecaEncontrada[FIELD_CLIENTE_FABRICANDO]);
+    const rawPecaModulo = pecaEncontrada[FIELD_AMBIENTE_COMPLETO] ? String(pecaEncontrada[FIELD_AMBIENTE_COMPLETO]).trim() : "";
+    const pecaModulo = rawPecaModulo.length > 0 ? rawPecaModulo : "(Sem Item/Módulo Definido)";
+
+    const pecaClienteAmbiente = extractClienteAmbiente(pecaEncontrada);
+    if (pecaClienteAmbiente !== currentClienteAmbiente) {
+        currentClienteAmbiente = pecaClienteAmbiente;
+        if(!selectedClientFilter && currentClienteDisplayEl) currentClienteDisplayEl.textContent = currentClienteAmbiente;
+    }
+
+    const isReq = isProcessRequired(pecaEncontrada, selectedMode);
+    const isDone = isProcessDone(pecaEncontrada, selectedMode);
     let feedbackType = 'error';
-    let feedbackMessage = `ERRO: Peça [${barcodeBipado}] não encontrada no cache local. Atualize a lista.`;
+    let feedbackMessage = "";
     let scanShouldBeSaved = false;
 
-    if (pecaEncontrada) {
-        const codigoPrincipalPeca = pecaEncontrada[FIELD_CODIGO_BIPAGEM] || barcodeBipado;
-        const nomePeca = pecaEncontrada[FIELD_NOME_PECA] || 'Nome não encontrado';
-        
-        // Dados para validação de filtro (usando as novas constantes)
-        const pecaClienteFilter = extractSafeValue(pecaEncontrada[FIELD_CLIENTE_FABRICANDO]);
-        
-        // --- [ALTERADO: COMPARAÇÃO EXATA DE ITEM+MODULO] ---
-        const rawPecaModulo = pecaEncontrada[FIELD_AMBIENTE_COMPLETO] ? String(pecaEncontrada[FIELD_AMBIENTE_COMPLETO]).trim() : "";
-        const pecaModulo = rawPecaModulo.length > 0 ? rawPecaModulo : "(Sem Item/Módulo Definido)";
-
-        // Atualiza contexto visual (legado)
-        const pecaClienteAmbiente = extractClienteAmbiente(pecaEncontrada);
-        if (pecaClienteAmbiente !== currentClienteAmbiente) {
-            currentClienteAmbiente = pecaClienteAmbiente;
-            // Apenas atualiza o display se não houver um filtro de cliente fixo ativo que sobrescreva
-            if(!selectedClientFilter && currentClienteDisplayEl) currentClienteDisplayEl.textContent = currentClienteAmbiente;
+    if (selectedMode === 'premontagem') {
+        if (!selectedClientFilter || selectedModules.length === 0) {
+            displayFeedback(`BLOQUEADO: Selecione "Cliente e Módulos"!`, 'error');
+            barcodeInput.value = ''; return;
         }
-
-        const isReq = isProcessRequired(pecaEncontrada, selectedMode);
-        const isDone = isProcessDone(pecaEncontrada, selectedMode);
-
-        // ============================================================
-        // VERIFICAÇÃO RÍGIDA (PRE-MONTAGEM) - FLUXO ATUALIZADO
-        // ============================================================
-        if (selectedMode === 'premontagem') {
-            
-            // 1. OBRIGATÓRIO TER FILTRO SELECIONADO
-            if (!selectedClientFilter || selectedModules.length === 0) {
-                feedbackMessage = `BLOQUEADO: Selecione "Cliente e Módulos" no botão cinza antes de bipar!`;
-                if(navigator.vibrate) navigator.vibrate([100, 50, 100]);
-                displayFeedback(feedbackMessage, 'error');
-                barcodeInput.value = ''; 
-                return;
-            }
-
-            // 2. VALIDA CLIENTE
-            if (pecaClienteFilter !== selectedClientFilter) {
-                feedbackMessage = `BLOQUEADO: Peça do cliente "${pecaClienteFilter}", mas o filtro é "${selectedClientFilter}"`;
-                if(navigator.vibrate) navigator.vibrate([100, 50, 100]);
-                displayFeedback(feedbackMessage, 'error');
-                barcodeInput.value = ''; 
-                return;
-            }
-
-            // 3. VALIDA ITEM+MODULO (EXATO)
-            if (!selectedModules.includes(pecaModulo)) {
-                feedbackMessage = `BLOQUEADO: Item/Módulo "${pecaModulo}" não selecionado no filtro!`;
-                if(navigator.vibrate) navigator.vibrate([100, 50, 100]);
-                displayFeedback(feedbackMessage, 'error');
-                barcodeInput.value = ''; 
-                return;
-            }
+        if (pecaClienteFilter !== selectedClientFilter || !selectedModules.includes(pecaModulo)) {
+            displayFeedback(`BLOQUEADO: Peça fora do filtro selecionado!`, 'error');
+            barcodeInput.value = ''; return;
         }
-        // ============================================================
+    }
 
-        if (!isReq) {
-             if (selectedMode === 'holzer') {
-                feedbackType = 'warning'; 
-                feedbackMessage = "Essa peça não é necessario cnc mas vai ser bipada normalmente em nome da CNC";
-                scanShouldBeSaved = true;
-                sessionScanCount++; 
-                updateSessionCounterUI();
-                pecaEncontrada[FIELD_STATUS_HOLZER_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM];
-            } else {
-                feedbackType = 'info'; 
-                feedbackMessage = `INFO: Peça [${nomePeca}] (${codigoPrincipalPeca}) não requer ${selectedMode}.`; 
-                scanShouldBeSaved = false;
-            }
-        } 
-        else if (isDone && selectedMode !== 'rebalho') {
-            feedbackType = 'warning'; 
-            feedbackMessage = `AVISO: ${selectedMode.toUpperCase()} para [${nomePeca}] já foi registrado.`; 
+    if (!isReq) {
+        if (selectedMode === 'holzer') {
+            feedbackType = 'warning'; feedbackMessage = "Peça s/ CNC - Registrada como CNC.";
+            scanShouldBeSaved = true; sessionScanCount++; 
+            pecaEncontrada[FIELD_STATUS_HOLZER_TXT] = codigoPrincipalPeca;
+        } else {
+            feedbackType = 'info'; feedbackMessage = `INFO: Peça não requer ${selectedMode}.`;
             scanShouldBeSaved = false;
-        } 
-        else {
-            // SUCESSO
-            scanShouldBeSaved = true;
-            sessionScanCount++; updateSessionCounterUI();
-
-            if (selectedMode === 'rebalho') {
-                feedbackType = 'warning'; 
-                feedbackMessage = `⚠ RETRABALHO GERADO: ${nomePeca} (${codigoPrincipalPeca})`;
-            } else {
-                feedbackType = 'success'; 
-                feedbackMessage = `OK: ${selectedMode.toUpperCase()} - ${nomePeca}`;
-
-                // Atualização Otimista
-                switch (selectedMode) {
-                    case 'nesting':       pecaEncontrada[FIELD_STATUS_NEST_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                    case 'seccionadora':  pecaEncontrada[FIELD_STATUS_SECC_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                    case 'coladeira':     pecaEncontrada[FIELD_STATUS_COLADEIRA_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                    case 'holzer':        pecaEncontrada[FIELD_STATUS_HOLZER_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                    case 'premontagem':   pecaEncontrada[FIELD_STATUS_PREMONTAGEM_TXT] = pecaEncontrada[FIELD_CODIGO_BIPAGEM]; break;
-                }
-                updateProgressUI();
-            }
         }
-    } else { scanShouldBeSaved = false; }
+    } 
+    else if (isDone && selectedMode !== 'rebalho') {
+        feedbackType = 'warning'; feedbackMessage = `AVISO: ${selectedMode.toUpperCase()} já realizado.`;
+        scanShouldBeSaved = false;
+    } 
+    else {
+        scanShouldBeSaved = true;
+        sessionScanCount++; 
+        if (selectedMode === 'rebalho') {
+            feedbackType = 'warning'; feedbackMessage = `⚠ RETRABALHO GERADO: ${nomePeca}`;
+        } else {
+            feedbackType = 'success'; feedbackMessage = `OK: ${selectedMode.toUpperCase()} - ${nomePeca}`;
+            const mapS = {nesting: FIELD_STATUS_NEST_TXT, seccionadora: FIELD_STATUS_SECC_TXT, coladeira: FIELD_STATUS_COLADEIRA_TXT, holzer: FIELD_STATUS_HOLZER_TXT, premontagem: FIELD_STATUS_PREMONTAGEM_TXT};
+            if(mapS[selectedMode]) pecaEncontrada[mapS[selectedMode]] = codigoPrincipalPeca;
+        }
+    }
 
     displayFeedback(feedbackMessage, feedbackType);
 
@@ -592,110 +515,58 @@ async function handleScan(event) {
         try {
             const db = await getDb();
             await db.add('pending_scans', { 
-                pecaId: pecaEncontrada[FIELD_CODIGO_BIPAGEM], 
-                timestamp: new Date().toISOString(), 
-                mode: selectedMode, 
-                encontrada: true, 
-                clienteAmbiente: extractSafeValue(pecaEncontrada[FIELD_CLIENTE_FABRICANDO]) // Salva o cliente correto
+                pecaId: codigoPrincipalPeca, timestamp: new Date().toISOString(), 
+                mode: selectedMode, encontrada: true, clienteAmbiente: pecaClienteFilter
             });
-        } catch (error) { console.error("Erro ao adicionar scan pendente:", error); displayFeedback(`Erro salvar scan: ${error.message}`, 'error'); }
+        } catch (error) { console.error("Erro scan pendente:", error); }
     }
 
-    barcodeInput.value = ''; barcodeInput.focus(); await updateUI();
+    barcodeInput.value = ''; barcodeInput.focus(); 
+    updateSessionCounterUI(); updateProgressUI(); updateUI();
 }
 
 // ============================================================================
-// SINCRONIZAÇÃO E CACHE
+// [OTIMIZADO] SINCRONIZAÇÃO INCREMENTAL
 // ============================================================================
-async function loadPecasFromDbToMemory() {
-    try {
-        const db = await getDb();
-        pecasEmMemoria = await db.getAll('pecas_cache') || [];
-        console.log(`Carregadas ${pecasEmMemoria.length} peças do DB p/ memória.`);
-    } catch (error) { console.error("Erro carregar peças p/ memória:", error); pecasEmMemoria = []; }
-}
-
 async function syncPecasCache(isSilent = false) {
-    if (!navigator.onLine) {
-        if (!isSilent) alert('Precisa estar online p/ baixar/atualizar!');
-        return;
-    }
-    if (isCacheSyncing) return;
-
+    if (!navigator.onLine || isCacheSyncing) return;
     isCacheSyncing = true;
-    if (!isSilent) displayFeedback('Baixando/Atualizando lista...', 'loading');
+    if (!isSilent) displayFeedback('Buscando atualizações...', 'loading');
     
+    const lastSync = localStorage.getItem('last_sync_timestamp') || '2024-01-01T00:00:00.000Z';
+
     try {
-        const response = await fetch(N8N_GET_PECAS_URL);
-        if (!response.ok) throw new Error(`Erro ${response.status}: ${response.statusText}`);
+        const response = await fetch(`${N8N_GET_PECAS_URL}?modifiedSince=${encodeURIComponent(lastSync)}`);
+        if (!response.ok) throw new Error(`Erro ${response.status}`);
         const pecas = await response.json();
 
-        const pecasValidas = [];
-        pecas.forEach((p) => {
-            if (typeof p !== 'object' || p === null) return;
-            const codigo = p[FIELD_CODIGO_BIPAGEM] ? String(p[FIELD_CODIGO_BIPAGEM]).trim() : null;
-            if (codigo && codigo !== '') {
-                pecasValidas.push(p);
+        if (Array.isArray(pecas) && pecas.length > 0) {
+            const db = await getDb();
+            const tx = db.transaction('pecas_cache', 'readwrite');
+            for (const p of pecas) {
+                if (p[FIELD_CODIGO_BIPAGEM]) await tx.store.put(p);
             }
-        });
-
-        if (pecas.length > 0 && pecasValidas.length === 0) {
-            alert(`ERRO: Nenhuma peça válida.`);
-            displayFeedback('Erro ao processar dados.', 'error'); 
-            isCacheSyncing = false; 
-            return;
+            await tx.done;
+            localStorage.setItem('last_sync_timestamp', new Date().toISOString());
+            await loadPecasFromDbToMemory();
+            if (!isSilent) alert(`${pecas.length} registros atualizados!`);
+        } else if (!isSilent) {
+            displayFeedback('Tudo atualizado.', 'success');
         }
-
-        const db = await getDb();
-        const tx = db.transaction('pecas_cache', 'readwrite');
-        await tx.store.clear();
-        
-        for (const peca of pecasValidas) {
-            try {
-                peca[FIELD_CODIGO_BIPAGEM] = String(peca[FIELD_CODIGO_BIPAGEM]).trim();
-                peca[FIELD_REQ_FILETACAO] = Number(peca[FIELD_REQ_FILETACAO] || 0);
-                peca[FIELD_REQ_CNC] = Number(peca[FIELD_REQ_CNC] || 0);
-                
-                if (peca[FIELD_AMBIENTE_COMPLETO]) {
-                    peca[FIELD_AMBIENTE_COMPLETO] = String(peca[FIELD_AMBIENTE_COMPLETO]).trim();
-                }
-
-                await tx.store.put(peca);
-            } catch (innerError) { console.error(`Erro salvar peça ${peca[FIELD_CODIGO_BIPAGEM]}:`, innerError); }
-        }
-        await tx.done;
-        pecasEmMemoria = pecasValidas;
-        
-        if (!isSilent) {
-            alert(`Lista atualizada! (${pecasValidas.length} válidas)`);
-            displayFeedback('Seleção de serviço necessária.', 'info');
-            showInterface('menu');
-        }
-        
     } catch (error) {
-        console.error("Falha GERAL sync cache:", error);
-        if (!isSilent) {
-            alert(`Erro ao baixar/atualizar: ${error.message}`);
-            displayFeedback('Falha ao atualizar lista.', 'error');
-        }
-    } finally {
-        isCacheSyncing = false;
-    }
+        console.error("Erro sync cache:", error);
+        if (!isSilent) alert(`Erro ao baixar: ${error.message}`);
+    } finally { isCacheSyncing = false; }
 }
 
+// ============================================================================
+// SINCRONIZAÇÃO DE SCANS PENDENTES
+// ============================================================================
 async function syncPendingScans(isSilent = false) {
-    if (!navigator.onLine) {
-        if (!isSilent) alert('Precisa estar online p/ sincronizar!');
-        return;
-    }
-    if (isScanSyncing) return;
-
+    if (!navigator.onLine || isScanSyncing) return;
     const db = await getDb();
     const allScans = await db.getAll('pending_scans');
-    if (allScans.length === 0) {
-        if (!isSilent) alert('Nenhuma bipagem pendente.');
-        return;
-    }
+    if (allScans.length === 0) { if(!isSilent) alert('Nenhuma bipagem pendente.'); return; }
 
     isScanSyncing = true;
     if (!isSilent) displayFeedback(`Enviando ${allScans.length} bipagens...`, 'loading');
@@ -706,42 +577,21 @@ async function syncPendingScans(isSilent = false) {
         let errorOccurred = false;
 
         if (normalScans.length > 0) {
-            const payloadNormal = normalScans.map(s => ({ pecaId: s.pecaId, timestamp: s.timestamp, mode: s.mode, clienteAmbiente: s.clienteAmbiente }));
-            try {
-                const r1 = await fetch(N8N_POST_SCANS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadNormal) });
-                if (!r1.ok) throw new Error(`Erro N8N Normal: ${r1.statusText}`);
-            } catch (e) { console.error(e); errorOccurred = true; }
+            const r1 = await fetch(N8N_POST_SCANS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(normalScans) });
+            if (!r1.ok) errorOccurred = true;
         }
-
         if (reworkScans.length > 0) {
-            const payloadRework = reworkScans.map(s => ({ pecaId: s.pecaId, timestamp: s.timestamp, mode: 'rebalho', clienteAmbiente: s.clienteAmbiente, motivo: 'App Mobile' }));
-            try {
-                const r2 = await fetch(N8N_POST_RETRABALHO_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadRework) });
-                if (!r2.ok) throw new Error(`Erro N8N Retrabalho: ${r2.statusText}`);
-            } catch (e) { console.error(e); errorOccurred = true; }
+            const r2 = await fetch(N8N_POST_RETRABALHO_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reworkScans) });
+            if (!r2.ok) errorOccurred = true;
         }
 
         if (!errorOccurred) {
             const tx = db.transaction('pending_scans', 'readwrite');
             await tx.store.clear(); await tx.done;
-            
-            if (!isSilent) {
-                alert(`${allScans.length} bipagens sincronizadas!`);
-                displayFeedback('Dados sincronizados!', 'success');
-            }
+            if (!isSilent) { alert(`Sincronizado!`); displayFeedback('Dados sincronizados!', 'success'); }
             await updateUI();
-        } else {
-            if (!isSilent) displayFeedback('Erro parcial no envio.', 'error');
-        }
-    } catch (error) {
-        console.error("Falha sync scans:", error);
-        if (!isSilent) {
-            alert(`Erro ao sincronizar: ${error.message}`);
-            displayFeedback('Falha na sincronização.', 'error');
-        }
-    } finally {
-        isScanSyncing = false;
-    }
+        } else if (!isSilent) displayFeedback('Erro parcial no envio.', 'error');
+    } catch (error) { console.error("Falha sync scans:", error); } finally { isScanSyncing = false; }
 }
 
 // ============================================================================
@@ -754,10 +604,7 @@ async function openDeleteModal() {
     barcodeInput.blur();
 }
 
-function closeDeleteModal() {
-    deleteModal.style.display = "none";
-    if (currentMode) { barcodeInput.focus(); }
-}
+function closeDeleteModal() { deleteModal.style.display = "none"; if (currentMode) barcodeInput.focus(); }
 
 async function renderPendingScansForDeletion() {
     try {
@@ -765,95 +612,62 @@ async function renderPendingScansForDeletion() {
         const pendingScans = await db.getAll('pending_scans');
         pendingScansListDelete.innerHTML = '';
         if (pendingScans.length === 0) { pendingScansListDelete.innerHTML = '<li>Nenhuma bipagem pendente.</li>'; btnDeleteSelected.disabled = true; btnDeleteAllPending.disabled = true; return; }
-        
         btnDeleteSelected.disabled = false; btnDeleteAllPending.disabled = false;
-        pendingScans.sort((a, b) => b.id - a.id);
-        
-        pendingScans.forEach(scan => {
+        pendingScans.sort((a, b) => b.id - a.id).forEach(scan => {
             const li = document.createElement('li');
-            const checkboxId = `scan-${scan.id}`;
-            const timeString = new Date(scan.timestamp).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
-            const modeText = scan.mode === 'rebalho' ? 'RETRABALHO' : (scan.mode ? scan.mode.toUpperCase() : 'DESCONHECIDO');
-            const styleColor = scan.mode === 'rebalho' ? 'color: var(--rebalho-color); font-weight:bold;' : 'color: var(--primary-color);';
-
-            li.innerHTML = `
-                <input type="checkbox" id="${checkboxId}" data-pecaid="${scan.pecaId}" data-mode="${scan.mode}" value="${scan.id}">
-                <label for="${checkboxId}">
-                    <span class="scan-mode" style="${styleColor}">[${modeText}]</span>
-                    <span class="scan-details">${scan.pecaId}</span>
-                    <span class="scan-time">${timeString}</span>
-                </label>
-            `;
+            li.innerHTML = `<input type="checkbox" id="scan-${scan.id}" data-pecaid="${scan.pecaId}" data-mode="${scan.mode}" value="${scan.id}">
+                            <label for="scan-${scan.id}">[${scan.mode.toUpperCase()}] ${scan.pecaId}</label>`;
             pendingScansListDelete.appendChild(li);
         });
-    } catch (error) { console.error("Erro renderizar scans exclusão:", error); pendingScansListDelete.innerHTML = '<li>Erro ao carregar lista.</li>'; btnDeleteSelected.disabled = true; btnDeleteAllPending.disabled = true; }
+    } catch (e) { console.error(e); }
 }
 
 async function deleteSelectedScans() {
-    const selectedCheckboxes = pendingScansListDelete.querySelectorAll('input[type="checkbox"]:checked');
-    if (selectedCheckboxes.length === 0) return alert("Nenhuma bipagem selecionada.");
-
-    const scansToDelete = Array.from(selectedCheckboxes).map(cb => ({ id: parseInt(cb.value, 10), pecaId: cb.dataset.pecaid, mode: cb.dataset.mode }));
-    if (!confirm(`Excluir ${scansToDelete.length} bipagens selecionadas?`)) return;
-
+    const selected = pendingScansListDelete.querySelectorAll('input[type="checkbox"]:checked');
+    if (selected.length === 0) return;
+    if (!confirm(`Excluir ${selected.length} itens?`)) return;
     try {
-        scansToDelete.forEach(scan => { revertOptimisticUpdate(scan.pecaId, scan.mode); });
         const db = await getDb();
         const tx = db.transaction('pending_scans', 'readwrite');
-        await Promise.all(scansToDelete.map(scan => tx.store.delete(scan.id)));
+        for (const cb of selected) {
+            revertOptimisticUpdate(cb.dataset.pecaid, cb.dataset.mode);
+            await tx.store.delete(parseInt(cb.value));
+        }
         await tx.done;
-        displayFeedback(`${scansToDelete.length} bipagens pendentes excluídas.`, 'success');
-        await renderPendingScansForDeletion();
-        await updateUI();
-        updateProgressUI();
-    } catch (error) { console.error("Erro excluir selecionados:", error); alert(`Erro: ${error.message}`); displayFeedback('Erro ao excluir.', 'error'); }
+        displayFeedback("Excluído com sucesso", "success");
+        await renderPendingScansForDeletion(); await updateUI(); updateProgressUI();
+    } catch (error) { console.error(error); }
 }
 
 async function clearAllPendingScans() {
-    const db = await getDb();
-    const allScans = await db.getAll('pending_scans');
-    if (allScans.length === 0) return alert("Não há bipagens pendentes.");
-    if (!confirm(`Excluir TODAS as ${allScans.length} bipagens pendentes?`)) return;
-
+    if (!confirm(`Excluir TODAS as bipagens pendentes?`)) return;
     try {
-        allScans.forEach(scan => { if (scan.encontrada && scan.pecaId && scan.mode) revertOptimisticUpdate(scan.pecaId, scan.mode); });
+        const db = await getDb();
+        const all = await db.getAll('pending_scans');
+        all.forEach(s => revertOptimisticUpdate(s.pecaId, s.mode));
         const tx = db.transaction('pending_scans', 'readwrite');
-        await tx.store.clear();
-        await tx.done;
-        displayFeedback(`Todas as ${allScans.length} bipagens pendentes foram excluídas.`, 'success');
-        await renderPendingScansForDeletion();
-        await updateUI();
-        updateProgressUI();
-    } catch (error) { console.error("Erro limpar pendentes:", error); alert(`Erro: ${error.message}`); displayFeedback('Erro ao limpar.', 'error'); }
+        await tx.store.clear(); await tx.done;
+        await renderPendingScansForDeletion(); await updateUI(); updateProgressUI();
+    } catch (error) { console.error(error); }
 }
 
 async function clearPartsCache() {
-    if (!confirm("ATENÇÃO!\n\nLimpar TODO o cache de peças local?\n\nSerá necessário 'Baixar/Atualizar Peças' novamente.")) return;
-    displayFeedback('Limpando cache de peças...', 'loading');
+    if (!confirm("Limpar cache local? Isso exigirá novo download total.")) return;
     try {
         const db = await getDb();
         const tx = db.transaction('pecas_cache', 'readwrite');
         await tx.store.clear(); await tx.done;
-        pecasEmMemoria = [];
-        alert("Cache de peças local foi limpo.\nClique em 'Baixar/Atualizar Peças'.");
-        displayFeedback('Cache limpo. Atualize a lista.', 'warning');
-        sessionScanCount = 0; updateSessionCounterUI();
-        showInterface('menu');
-    } catch (error) { console.error("Erro ao limpar cache:", error); alert(`Erro: ${error.message}`); displayFeedback('Erro ao limpar cache.', 'error'); }
+        pecasEmMemoria = []; pecasMap.clear();
+        alert("Cache limpo."); showInterface('menu');
+    } catch (error) { console.error(error); }
 }
 
 function revertOptimisticUpdate(pecaId, mode) {
     if (!pecaId || !mode || mode === 'rebalho') return;
     const peca = pecasEmMemoria.find(p => p[FIELD_CODIGO_BIPAGEM] === pecaId);
     if (!peca) return;
-
-    switch (mode) {
-        case 'nesting': peca[FIELD_STATUS_NEST_TXT] = null; break;
-        case 'seccionadora': peca[FIELD_STATUS_SECC_TXT] = null; break;
-        case 'coladeira': peca[FIELD_STATUS_COLADEIRA_TXT] = null; break;
-        case 'holzer': peca[FIELD_STATUS_HOLZER_TXT] = null; break;
-        case 'premontagem': peca[FIELD_STATUS_PREMONTAGEM_TXT] = null; break;
-    }
+    const maps = {nesting: FIELD_STATUS_NEST_TXT, seccionadora: FIELD_STATUS_SECC_TXT, coladeira: FIELD_STATUS_COLADEIRA_TXT, holzer: FIELD_STATUS_HOLZER_TXT, premontagem: FIELD_STATUS_PREMONTAGEM_TXT};
+    if(maps[mode]) peca[maps[mode]] = null;
 }
 
 // ============================================================================
@@ -861,62 +675,30 @@ function revertOptimisticUpdate(pecaId, mode) {
 // ============================================================================
 function updateProgressUI() {
     if (currentMode === 'rebalho') return;
-
     const mode = currentMode;
     const modeDisplay = currentModeDisplay;
-
-    if (!mode || pecasEmMemoria.length === 0) {
-        progressSection.style.display = 'none'; return;
-    }
+    if (!mode || pecasEmMemoria.length === 0) { progressSection.style.display = 'none'; return; }
     
-    // 1. Filtrar Escopo
     let pecasEscopo = pecasEmMemoria;
     let textoFiltro = "";
 
-    // SE ESTIVER EM PRE-MONTAGEM COM FILTRO ATIVO, CALCULAR PROGRESSO SOBRE O FILTRO
     if (currentMode === 'premontagem' && selectedClientFilter) {
         pecasEscopo = pecasEscopo.filter(p => {
             const mesmoCli = extractSafeValue(p[FIELD_CLIENTE_FABRICANDO]) === selectedClientFilter;
-            
-            // --- [ALTERADO: COMPARAÇÃO EXATA DE ITEM+MODULO] ---
-            const rawModPeca = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "";
-            const modPeca = rawModPeca.length > 0 ? rawModPeca : "(Sem Item/Módulo Definido)";
-            const mesmoMod = selectedModules.includes(modPeca);
-            
-            return mesmoCli && mesmoMod;
+            const rawMod = p[FIELD_AMBIENTE_COMPLETO] ? String(p[FIELD_AMBIENTE_COMPLETO]).trim() : "(Sem Módulo)";
+            return mesmoCli && selectedModules.includes(rawMod);
         });
-        textoFiltro = " [Filtro Ativo]";
-    } else if (currentMode === 'premontagem') {
-        // Se for pre-montagem mas sem filtro, não mostra progresso para não confundir com números gigantes
-        progressSection.style.display = 'none';
-        return;
-    } else {
-        // OUTROS MODOS: Usa o filtro visual de ambiente se houver (lógica antiga)
-        if(currentClienteAmbiente) {
-             pecasEscopo = pecasEscopo.filter(p => extractClienteAmbiente(p) === currentClienteAmbiente);
-        }
-    }
+        textoFiltro = " [Filtro]";
+    } else if (currentMode === 'premontagem') { progressSection.style.display = 'none'; return; }
 
     const pecasRequeridas = pecasEscopo.filter(p => isProcessRequired(p, mode));
     const pecasFeitas = pecasRequeridas.filter(p => isProcessDone(p, mode));
-    const totalRequeridas = pecasRequeridas.length;
-    const totalFeitas = pecasFeitas.length;
+    const percentage = pecasRequeridas.length > 0 ? (pecasFeitas.length / pecasRequeridas.length) * 100 : 0;
 
-    if (totalRequeridas === 0) {
-        if(currentMode === 'premontagem') {
-             progressText.textContent = `Aguardando seleção de filtro...`;
-        } else {
-             progressText.textContent = `${modeDisplay}: Nenhuma peça requer este serviço.`;
-        }
-        progressBar.style.width = '0%';
-        progressSection.style.display = 'block';
-    } else {
-        const percentage = totalRequeridas > 0 ? (totalFeitas / totalRequeridas) * 100 : 0;
-        progressText.textContent = `${modeDisplay}: ${totalFeitas} / ${totalRequeridas} (${percentage.toFixed(0)}%)${textoFiltro}`;
-        progressBar.style.width = percentage + '%';
-        progressBar.style.backgroundColor = MODE_COLORS[mode] || MODE_COLORS.default;
-        progressSection.style.display = 'block';
-    }
+    progressText.textContent = `${modeDisplay}: ${pecasFeitas.length} / ${pecasRequeridas.length} (${percentage.toFixed(0)}%)${textoFiltro}`;
+    progressBar.style.width = percentage + '%';
+    progressBar.style.backgroundColor = MODE_COLORS[mode];
+    progressSection.style.display = 'block';
 }
 
 async function updateUI() {
@@ -925,40 +707,20 @@ async function updateUI() {
         const count = await db.count('pending_scans');
         pendingCountEl.textContent = count;
         pendingCountSyncBtn.textContent = count;
-    } catch (error) { console.error("Erro atualizar contagem pendentes:", error); }
+    } catch (e) {}
 
-    lastScansList.innerHTML = '<li>Atualizando...</li>';
+    lastScansList.innerHTML = '';
     try {
         const db = await getDb();
-        let last5Scans = [];
+        let last5 = [];
         let cursor = await db.transaction('pending_scans').store.openCursor(null, 'prev');
-        while (cursor && last5Scans.length < 5) {
-            last5Scans.push(cursor.value);
-            cursor = await cursor.continue();
-        }
-        
-        lastScansList.innerHTML = '';
-        if (last5Scans.length === 0) {
-            lastScansList.innerHTML = '<li>Nenhuma bipagem recente.</li>';
-        } else {
-            last5Scans.forEach(scan => {
-                const li = document.createElement('li');
-                const isRework = scan.mode === 'rebalho';
-                const statusIcon = isRework ? '⚠' : (scan.encontrada ? '✔️' : '❓');
-                const statusClass = scan.encontrada ? 'success' : 'error';
-                // Mostra o cliente (novo ou antigo campo)
-                const displayCliente = scan.clienteAmbiente || scan.cliente || 'Desconhecido';
-                const clienteAmbienteTag = displayCliente ? `<span class="cliente-tag">${displayCliente.substring(0, 30)}...</span>` : '';
-                
-                let modeTag = '';
-                if (isRework) modeTag = `<span class="mode-tag" style="color:var(--rebalho-color); font-weight:bold;">RETRABALHO</span>`;
-                else modeTag = scan.mode ? `<span class="mode-tag">${scan.mode.toUpperCase()}</span>` : '';
-
-                li.innerHTML = `${clienteAmbienteTag}${modeTag}<span class="status-icon ${statusClass}">${statusIcon}</span><span>${scan.pecaId}</span><small>(${new Date(scan.timestamp).toLocaleTimeString()})</small>`;
-                lastScansList.appendChild(li);
-            });
-        }
-    } catch (error) { lastScansList.innerHTML = '<li>Erro ao carregar histórico.</li>'; }
+        while (cursor && last5.length < 5) { last5.push(cursor.value); cursor = await cursor.continue(); }
+        last5.forEach(scan => {
+            const li = document.createElement('li');
+            li.innerHTML = `<span class="cliente-tag">${scan.clienteAmbiente || ''}</span> [${scan.mode.toUpperCase()}] ${scan.pecaId}`;
+            lastScansList.appendChild(li);
+        });
+    } catch (e) {}
 }
 
 function updateOnlineStatus(isOnline) {
@@ -967,12 +729,9 @@ function updateOnlineStatus(isOnline) {
 }
 
 function displayFeedback(message, type) {
-    if (feedbackTimer) { clearTimeout(feedbackTimer); feedbackTimer = null; }
-    feedbackArea.textContent = message;
-    feedbackArea.className = `feedback ${type}`;
-    if (type === 'success' || type === 'error' || type === 'warning') {
-        feedbackTimer = setTimeout(() => { if(currentMode) displayFeedback('Pronto para bipar!', 'info'); }, 3000); 
-    }
+    if (feedbackTimer) clearTimeout(feedbackTimer);
+    feedbackArea.textContent = message; feedbackArea.className = `feedback ${type}`;
+    feedbackTimer = setTimeout(() => { if(currentMode) { feedbackArea.textContent = 'Pronto!'; feedbackArea.className = 'feedback info'; } }, 3000);
 }
 
 function updateSessionCounterUI() { if (sessionCountEl) sessionCountEl.textContent = sessionScanCount; }
@@ -980,7 +739,7 @@ function updateSessionCounterUI() { if (sessionCountEl) sessionCountEl.textConte
 function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js').then(reg => console.log('Service Worker registrado!', reg)).catch(err => console.error('Falha registro SW:', err));
+            navigator.serviceWorker.register('/sw.js').then(reg => console.log('SW OK')).catch(err => console.error(err));
         });
     }
 }
