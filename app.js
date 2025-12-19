@@ -2,7 +2,7 @@
 // CONFIGURAÇÃO
 // ============================================================================
 const N8N_GET_PECAS_URL = 'http://192.168.18.190:5678/webhook/da1a3dc7-b5ca-46ff-9ced-600102b22bec';
-const N8N_BUSCA_UNICA_URL = 'http://192.168.18.190:5678/webhook/buscar-peca-unica'; // NOVO WEBHOOK PARA URGÊNCIAS
+const N8N_BUSCA_UNICA_URL = 'http://192.168.18.190:5678/webhook/0284da8b-9bc6-43d3-83e7-d3cd1b1e9c13'; // NOVO WEBHOOK PARA URGÊNCIAS
 const N8N_POST_SCANS_URL = 'http://192.168.18.190:5678/webhook/dd0a9938-fd80-4308-8ecc-c317b61a032e'; 
 const N8N_POST_RETRABALHO_URL = 'http://192.168.18.190:5678/webhook/571327b7-0de9-46ac-b5ae-e7e645134380'; 
 
